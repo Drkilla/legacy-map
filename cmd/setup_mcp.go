@@ -75,8 +75,11 @@ func runSetupMCP(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Test it:")
 	fmt.Fprintln(os.Stderr, "  1. Start Claude Code: claude")
-	fmt.Fprintln(os.Stderr, `  2. Ask: "list available MCP tools"`)
-	fmt.Fprintln(os.Stderr, "  3. You should see: list_traces, get_last_trace, get_trace_by_uri")
+	fmt.Fprintln(os.Stderr, `  2. Ask: "Retrace moi ce qui se passe sur GET /api/your-endpoint"`)
+	fmt.Fprintln(os.Stderr, "  3. Claude triggers the request, captures the trace, and explains the flow")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "💡 Add this to your project's CLAUDE.md for best results:")
+	fmt.Fprint(os.Stderr, claudeMDSnippet)
 
 	return nil
 }

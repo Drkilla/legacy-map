@@ -1,127 +1,261 @@
 # legacy-map
 
-Cartographie automatique des flux d'exécution PHP/Symfony via XDebug + LLM.
+Automatic execution flow mapping for PHP/Symfony via XDebug + AI.
 
-Transforme les traces XDebug brutes en call trees exploitables par Claude, Copilot, ou n'importe quel LLM via MCP.
+> You click in your app. You ask Claude: "What just happened?" He tells you.
 
-## Le problème
+## The problem
 
-Sur une codebase legacy PHP :
-- Personne ne sait exactement ce que fait le code
-- La doc n'existe pas ou est obsolète
-- Les flux métier sont incompréhensibles sans guide
+On a PHP/Symfony codebase — especially legacy:
+- Nobody knows exactly what the code does
+- Documentation doesn't exist or is outdated
+- Devs spend hours navigating code to understand a single flow
+- There's dead code nobody dares to touch
 
-## La solution
+## How it works
 
-1. Tu cliques dans ton app Symfony
-2. XDebug capture la trace d'exécution
-3. legacy-map filtre le bruit (99.9% des appels framework éliminés)
-4. Tu demandes à Claude : "Qu'est-ce qui vient de se passer ?"
-
-## Quick Start
-
-### Installation
-
-```bash
-go install github.com/drkilla/legacy-map@latest
+```
+You trigger a request in your app
+        │
+   XDebug captures the full execution trace
+        │
+   legacy-map filters the noise (99.97% of framework calls eliminated)
+        │
+   You ask Claude → he explains the flow, generates docs, diagrams
 ```
 
-### Setup (30 secondes)
+## Real-world results
 
-```bash
-cd /ton/projet/symfony
-legacy-map init
-# Suis les instructions affichées
-```
-
-### Utilisation
-
-```bash
-# Lance le MCP server
-legacy-map serve ./xdebug-traces
-
-# Ou branche directement Claude Code
-legacy-map setup-mcp ./xdebug-traces
-```
-
-Puis dans Claude Code :
-> "Retrace moi ce qui se passe quand je POST sur /api/clients"
-
-Claude déclenche automatiquement la requête, capture la trace XDebug, et t'explique le flux.
-
-## Installation sans Go
-
-Télécharge le binaire depuis [Releases](https://github.com/drkilla/legacy-map/releases) :
-
-```bash
-# Linux
-curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-linux-amd64 -o legacy-map
-chmod +x legacy-map
-sudo mv legacy-map /usr/local/bin/
-
-# macOS
-curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-darwin-arm64 -o legacy-map
-chmod +x legacy-map
-sudo mv legacy-map /usr/local/bin/
-```
-
-## Résultats réels
-
-| Trace | Appels bruts | Après filtrage | Réduction |
-|-------|-------------|----------------|-----------|
+| Endpoint | Raw calls | After filtering | Reduction |
+|----------|-----------|-----------------|-----------|
 | POST /api/admin/clients | 133,000 | 43 | 99.97% |
 | POST /api/auth/login | 102,272 | 29 | 99.97% |
 | GET /api/admin/cases | 133,000 | 43 | 99.97% |
+| POST /api/chat | 7,432 | 16 | 99.78% |
 
-## Commandes
+## Quick Start
+
+### 1. Install
 
 ```bash
-legacy-map init                  # Setup XDebug + dossier traces
-legacy-map parse <file.xt>       # Parse une trace → JSON stdout
-legacy-map watch <dir>           # Surveille et parse en continu
-legacy-map serve <dir>           # Watcher + MCP server
-legacy-map setup-mcp <dir>       # Configure Claude Code
+# With Go
+go install github.com/drkilla/legacy-map@latest
+
+# Or download the binary
+curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-linux-amd64 -o legacy-map
+chmod +x legacy-map && sudo mv legacy-map /usr/local/bin/
 ```
 
-## Comment ça marche
+### 2. Setup in your project
 
-Trois couches de filtrage transforment des centaines de milliers d'appels en quelques dizaines de nœuds :
+```bash
+cd /your/symfony/project
+legacy-map init
+# Follow the displayed instructions
+```
 
-1. **Fonctions PHP internes** — `strlen`, `array_map`, `sprintf`, etc. sont éliminées
-2. **Namespaces vendor** — `Symfony\`, `Doctrine\`, `Twig\`, `Monolog\`, `Psr\`, `Composer\`, etc. sont exclus
-3. **Collapse sous-arbres** — quand du code `App\` appelle du vendor, seul le point d'entrée est conservé (pas ses centaines d'appels internes)
+`init` detects your environment (Docker or local), checks if XDebug is installed, generates the config, and guides you step by step.
 
-En plus : les appels répétés consécutifs sont mergés (`call_count`), les external calls dédupliqués, et les valeurs tronquées à 200 chars.
+### 3. Connect Claude Code
+
+```bash
+legacy-map setup-mcp ./xdebug-traces
+```
+
+### 4. Use
+
+Restart Claude Code, then:
+
+```
+> "Trace the flow of POST /api/clients"
+```
+
+Claude triggers the request, captures the XDebug trace, and explains the full execution flow. No browser, no curl.
+
+## The killer feature: trigger_trace
+
+No need to leave Claude Code. Just ask:
+
+```
+> "What happens when I POST to /api/auth/login?"
+> "Trace the GET /api/cases flow with this token: Bearer xxx"
+> "Compare the flows of /login and /clients"
+```
+
+Claude uses the `trigger_trace` MCP tool to fire the HTTP request with XDebug tracing, capture the trace, filter it, and explain the result — all in one question.
+
+## Commands
+
+```bash
+legacy-map init                    # Setup XDebug + trace directory + install guide
+legacy-map parse <file.xt>         # Parse a trace → JSON stdout
+legacy-map watch <dir>             # Watch and parse continuously
+legacy-map serve <dir>             # Watcher + MCP server (for Claude Code)
+legacy-map setup-mcp <dir>         # Configure Claude Code automatically
+```
+
+### Options
+
+```bash
+# Change application namespace (default: App\)
+legacy-map parse --app-ns=Acme\\ trace.xt
+
+# Exclude additional namespaces
+legacy-map parse --exclude-ns=Sentry\\,Jean85\\ trace.xt
+
+# HTTP timeout for slow endpoints (default: 30s)
+legacy-map serve --http-timeout=60 ./xdebug-traces
+```
 
 ## MCP Tools
 
-- **`trigger_trace(url, method, body, headers)`** — déclenche une requête HTTP avec XDebug, attend la trace, et retourne le call tree. **La killer feature** : Claude fait tout sans quitter le terminal.
-- **`list_traces`** — liste les traces en mémoire (URI, durée, stats)
-- **`get_last_trace(n)`** — les N dernières traces avec call tree complet
-- **`get_trace_by_uri(uri)`** — traces matchant une URI (recherche partielle)
+| Tool | Description |
+|------|-------------|
+| `trigger_trace` | Trigger an HTTP request with XDebug and return the filtered call tree |
+| `list_traces` | List traces in memory with metadata |
+| `get_last_trace` | Return the N most recent complete traces |
+| `get_trace_by_uri` | Find traces by URI pattern |
 
-## Configuration
+## What the filtering eliminates
 
-```bash
-# Changer le namespace applicatif (défaut: App\)
-legacy-map parse --app-ns=Acme\\ trace.xt
+legacy-map applies 3 layers of filtering:
 
-# Exclure des namespaces supplémentaires
-legacy-map parse --exclude-ns=Sentry\\,Jean85\\ trace.xt
+1. **PHP internal functions** — `strlen`, `array_map`, `sprintf`... eliminated
+2. **Framework namespaces** — `Symfony\`, `Doctrine\`, `Twig\`, `Monolog\`... excluded
+3. **Vendor collapse** — when your code calls `EntityManager::persist()`, you see the call but not Doctrine's 200 internal lines
 
-# Changer le préfixe de chemin (défaut: /app/)
-legacy-map parse --path-prefix=/var/www/ trace.xt
+Result: on a typical Symfony request, 99.97% of calls are framework noise. legacy-map keeps only your application code.
 
-# Taille du buffer de traces en mémoire (défaut: 20)
-legacy-map serve --buffer-size=50 ./xdebug-traces
+## Documentation generation
+
+With captured traces, ask Claude to generate docs:
+
+```
+> "Generate technical documentation for all captured flows
+>  with Mermaid sequenceDiagram diagrams"
 ```
 
-## Pré-requis
+Claude produces for each endpoint:
+- A business summary (readable by non-devs)
+- A Mermaid sequence diagram
+- The list of services involved with their roles
+- External dependencies (Doctrine, Mailer, etc.)
+- Observations: perf bottlenecks, N+1, dead code
 
-- Go 1.22+
-- PHP avec XDebug 3.x
-- Un projet Symfony (ou tout projet PHP)
+## Troubleshooting
 
-## Licence
+### No traces appearing
+
+**XDebug not installed:**
+```bash
+php -m | grep xdebug
+# Docker: docker compose exec php php -m | grep xdebug
+```
+If absent, `legacy-map init` guides you through installation.
+
+**XDebug installed but not tracing:**
+```bash
+# Check config
+php -i | grep xdebug.mode
+# Should show: trace
+
+php -i | grep xdebug.start_with_request
+# If "trigger": add ?XDEBUG_TRACE=1 to the URL
+# If "yes": every request is traced automatically
+```
+
+**Trace directory not accessible:**
+```bash
+# Check the directory exists and is writable
+ls -la /tmp/xdebug-traces/
+
+# Docker: check the volume is mounted
+docker compose exec php ls -la /tmp/xdebug-traces/
+```
+
+### Traces are .xt.gz files (compressed)
+
+XDebug 3.x compresses by default. legacy-map cannot read compressed files.
+
+```ini
+# Add to your XDebug config:
+xdebug.use_compression=0
+```
+
+Restart PHP. `legacy-map init` already includes this option.
+
+### trigger_trace timeout
+
+Some endpoints are slow (external API calls, LLM, heavy processing).
+
+```bash
+# Increase the MCP server default timeout
+legacy-map serve --http-timeout=60 ./xdebug-traces
+```
+
+Or in Claude Code, specify the timeout:
+```
+> "Trace POST /api/chat with a 120 second timeout"
+```
+
+### Empty call tree (only Kernel bootstrap)
+
+The request failed before reaching application code (401, 404, 500 at framework level).
+
+- **401**: endpoint requires authentication. Pass the JWT token in headers.
+- **404**: wrong URL. Check with `bin/console debug:router`.
+- **500**: PHP error. Check `var/log/dev.log`.
+
+### Too much noise in the call tree
+
+```bash
+# Exclude specific namespaces
+legacy-map serve --exclude-ns=Sentry\\,Jean85\\,ContainerXXX\\ ./xdebug-traces
+```
+
+### MCP not connecting in Claude Code
+
+```bash
+# Check the binary is accessible
+which legacy-map
+
+# Check MCP config
+claude mcp list
+
+# Restart Claude Code after MCP config changes
+```
+
+## Claude Code integration
+
+For Claude to automatically use legacy-map instead of reading source code, add to your project's `CLAUDE.md`:
+
+```markdown
+## Tracing & Flow Analysis
+
+This project has the legacy-map MCP server connected.
+For any question about "what happens when...", "trace the flow of...",
+or any execution flow analysis: use the legacy-map MCP tools
+(trigger_trace, list_traces, get_last_trace, get_trace_by_uri)
+INSTEAD OF reading source code statically.
+```
+
+## Prerequisites
+
+- **Go 1.22+** (for `go install`)
+- **PHP with XDebug 3.x** (on the target project)
+- **Symfony** (or any PHP project — namespace filtering is configurable)
+
+## Architecture
+
+```
+legacy-map (Go binary)
+├── Parser      — streaming TSV (bufio.Scanner, handles 50-500 MB files)
+├── Filter      — 3 layers (PHP internals, namespaces, vendor collapse)
+├── CallTree    — tree reconstruction + merge + dedup
+├── Watcher     — fsnotify, thread-safe ring buffer
+└── MCP Server  — stdio, 4 tools for Claude Code / Cursor / Copilot
+```
+
+## License
 
 MIT

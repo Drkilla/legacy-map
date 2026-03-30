@@ -24,9 +24,10 @@ type Config struct {
 
 // Watcher watches a directory for new .xt files and processes them.
 type Watcher struct {
-	cfg   Config
-	store *Store
-	done  chan struct{}
+	cfg          Config
+	store        *Store
+	done         chan struct{}
+	gzWarnedOnce bool
 }
 
 // New creates a new Watcher.
@@ -72,10 +73,15 @@ func (w *Watcher) Run() error {
 			if !ok {
 				return nil
 			}
-			if strings.HasSuffix(event.Name, ".xt") && event.Has(fsnotify.Create) {
-				name := event.Name
-				// Deduplicate: drain any subsequent events for this file
-				w.handleNewFile(name)
+			if event.Has(fsnotify.Create) {
+				if strings.HasSuffix(event.Name, ".xt.gz") {
+					if !w.gzWarnedOnce {
+						log.Printf("⚠ Compressed trace detected: %s — Set xdebug.use_compression=0 in your PHP config and restart", filepath.Base(event.Name))
+						w.gzWarnedOnce = true
+					}
+				} else if strings.HasSuffix(event.Name, ".xt") {
+					w.handleNewFile(event.Name)
+				}
 			}
 		case err, ok := <-fsw.Errors:
 			if !ok {

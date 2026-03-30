@@ -45,11 +45,12 @@ var serveCmd = &cobra.Command{
 }
 
 var (
-	flagExcludeNS  []string
-	flagAppNS      []string
-	flagPathPrefix string
-	flagScenario   string
-	flagBufferSize int
+	flagExcludeNS   []string
+	flagAppNS       []string
+	flagPathPrefix  string
+	flagScenario    string
+	flagBufferSize  int
+	flagHTTPTimeout int
 )
 
 func init() {
@@ -70,6 +71,9 @@ func init() {
 		cmd.Flags().IntVar(&flagBufferSize, "buffer-size", 20,
 			"Number of recent traces to keep in memory")
 	}
+
+	serveCmd.Flags().IntVar(&flagHTTPTimeout, "http-timeout", 30,
+		"Default HTTP timeout in seconds for trigger_trace MCP tool")
 
 	rootCmd.AddCommand(parseCmd)
 	rootCmd.AddCommand(watchCmd)
@@ -156,7 +160,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Create and start MCP server on stdio
-	mcpSrv := mcpserver.NewServer(w.Store())
+	mcpSrv := mcpserver.NewServer(w.Store(), flagHTTPTimeout)
 
 	log.SetOutput(os.Stderr) // Keep log output on stderr, stdio is for MCP
 

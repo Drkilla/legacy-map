@@ -8,7 +8,7 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 - `internal/filter/` : filtrage par namespace (trie), exclusion fonctions internes/bootstrap, collapse vendor closures
 - `internal/calltree/` : construction CallTree, merge appels répétés, dédup external calls, détection services
 - `internal/watcher/` : fsnotify watcher + ring buffer thread-safe (sync.RWMutex)
-- `internal/mcp/` : MCP server (stdio) exposant les traces parsées via 3 tools
+- `internal/mcp/` : MCP server (stdio) exposant les traces parsées via 4 tools
 
 ## Commandes
 
@@ -24,6 +24,7 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 - `--app-ns` : préfixes namespace applicatif (défaut: `App\`)
 - `--path-prefix` : préfixe à retirer des chemins (défaut: `/app/`)
 - `--buffer-size` : nombre de traces en mémoire (défaut: 20, pour watch/serve)
+- `--http-timeout` : timeout HTTP par défaut pour trigger_trace en secondes (défaut: 30, pour serve)
 
 ## Conventions
 
@@ -37,9 +38,9 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 
 ## MCP Tools
 
-- `trigger_trace(url, method, body, headers)` : déclenche une requête HTTP avec XDebug tracing, attend la trace, retourne le call tree
+- `trigger_trace(url, method, body, headers, timeout)` : déclenche une requête HTTP avec XDebug tracing, attend la trace, retourne le call tree
 - `get_last_trace(n)` : N dernières traces avec call tree complet
-- `get_trace_by_uri(uri)` : recherche partielle par URI
+- `get_trace_by_uri(uri, limit)` : recherche partielle par URI (limit défaut: 1)
 - `list_traces()` : métadonnées uniquement (pas de call tree)
 
 ## Build & Test

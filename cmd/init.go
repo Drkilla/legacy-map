@@ -52,6 +52,21 @@ xdebug.trace_output_name=trace.%%t.%%R
 xdebug.start_with_request=trigger
 xdebug.collect_return=1
 xdebug.collect_assignments=0
+; Disable compression — legacy-map reads raw .xt files, not .xt.gz
+xdebug.use_compression=0
+`
+
+const claudeMDSnippet = `
+## Tracing & Flow Analysis
+
+This project has the legacy-map MCP server connected.
+For any question about "what happens when...", "trace the flow of...",
+or any execution flow analysis: use the legacy-map MCP tools
+(trigger_trace, list_traces, get_last_trace, get_trace_by_uri)
+INSTEAD OF reading source code statically.
+
+trigger_trace makes a real HTTP request with XDebug tracing enabled
+and returns the filtered application-level call tree.
 `
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -164,6 +179,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "  5. Trigger traces:")
 	fmt.Fprintln(os.Stderr, `     curl "http://localhost:8000/your-route?XDEBUG_TRACE=1"`)
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "💡 Add this to your project's CLAUDE.md for best results:")
+	fmt.Fprint(os.Stderr, claudeMDSnippet)
 
 	return nil
 }
