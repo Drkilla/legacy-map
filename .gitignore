@@ -1,0 +1,6 @@
+# Binary
+legacy-map
+
+# XDebug traces
+*.xt
+xdebug-traces/
