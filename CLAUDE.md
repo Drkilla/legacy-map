@@ -12,9 +12,11 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 
 ## Commandes
 
+- `legacy-map init` : setup XDebug + dossier traces pour un projet PHP/Symfony
 - `legacy-map parse <file.xt>` : parse une trace et affiche le JSON sur stdout (stats sur stderr)
 - `legacy-map watch <dir>` : surveille et parse en continu
 - `legacy-map serve <dir>` : watcher + MCP server (stdio)
+- `legacy-map setup-mcp [dir]` : configure Claude Code pour utiliser legacy-map comme MCP server
 
 ## Flags communs
 
@@ -42,6 +44,7 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 ## Build & Test
 
 ```bash
-go build -o legacy-map .
-go test ./...
+make build    # ou: go build -o legacy-map .
+make test     # ou: go test ./...
+make install  # go install avec version injectée
 ```

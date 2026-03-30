@@ -1,97 +1,124 @@
 # legacy-map
 
-Outil CLI qui capture les traces XDebug d'une application PHP/Symfony et les transforme en call tree applicatif exploitable par un LLM via MCP.
+Cartographie automatique des flux d'exécution PHP/Symfony via XDebug + LLM.
 
-**Le problème** : une requête Symfony génère des centaines de milliers d'appels de fonctions. Impossible de comprendre ce qui se passe sans filtrer le bruit (vendor, fonctions PHP internes, bootstrap).
+Transforme les traces XDebug brutes en call trees exploitables par Claude, Copilot, ou n'importe quel LLM via MCP.
 
-**La solution** : `legacy-map` parse les traces XDebug en streaming, filtre agressivement (>99.99% de réduction), et expose un call tree propre via un serveur MCP.
+## Le problème
 
-## Résultats typiques
+Sur une codebase legacy PHP :
+- Personne ne sait exactement ce que fait le code
+- La doc n'existe pas ou est obsolète
+- Les flux métier sont incompréhensibles sans guide
 
-| Trace | Raw calls | Après filtrage | Réduction |
-|-------|-----------|----------------|-----------|
-| `POST /api/admin/login/check` (146 Mo) | 316,114 | **13 nœuds** | 99.996% |
-| `POST /api/auth/admin/login` (45 Mo) | 102,272 | **8 nœuds** | 99.992% |
+## La solution
 
-## Installation
+1. Tu cliques dans ton app Symfony
+2. XDebug capture la trace d'exécution
+3. legacy-map filtre le bruit (99.9% des appels framework éliminés)
+4. Tu demandes à Claude : "Qu'est-ce qui vient de se passer ?"
 
-```bash
-go build -o legacy-map .
-```
+## Quick Start
 
-## Configuration XDebug
-
-Dans `php.ini` ou `xdebug.ini` :
-
-```ini
-[xdebug]
-xdebug.mode = trace
-xdebug.start_with_request = trigger
-xdebug.trace_format = 1
-xdebug.trace_output_dir = /path/to/traces
-xdebug.trace_output_name = trace.%t.%R
-```
-
-Puis déclencher une trace en ajoutant `?XDEBUG_TRACE=1` à l'URL ou en utilisant l'extension navigateur Xdebug Helper.
-
-## Utilisation
-
-### Parser une trace
+### Installation
 
 ```bash
-legacy-map parse trace.xt
-# JSON sur stdout, stats sur stderr
+go install github.com/drkilla/legacy-map@latest
 ```
 
-### Surveiller un dossier
+### Setup (30 secondes)
 
 ```bash
-legacy-map watch /path/to/traces
-# Parse automatiquement les nouveaux fichiers .xt
+cd /ton/projet/symfony
+legacy-map init
+# Suis les instructions affichées
 ```
 
-### MCP Server
+### Utilisation
 
 ```bash
-legacy-map serve /path/to/traces
-# Lance le watcher + serveur MCP sur stdio
+# Lance le MCP server
+legacy-map serve ./xdebug-traces
+
+# Ou branche directement Claude Code
+legacy-map setup-mcp ./xdebug-traces
 ```
 
-#### Configuration Claude Code
+Puis dans Claude Code :
+> "Qu'est-ce qui se passe quand je POST sur /api/clients ?"
 
-Ajouter dans `.claude/settings.json` :
+## Installation sans Go
 
-```json
-{
-  "mcpServers": {
-    "legacy-map": {
-      "command": "/path/to/legacy-map",
-      "args": ["serve", "/path/to/traces"]
-    }
-  }
-}
+Télécharge le binaire depuis [Releases](https://github.com/drkilla/legacy-map/releases) :
+
+```bash
+# Linux
+curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-linux-amd64 -o legacy-map
+chmod +x legacy-map
+sudo mv legacy-map /usr/local/bin/
+
+# macOS
+curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-darwin-arm64 -o legacy-map
+chmod +x legacy-map
+sudo mv legacy-map /usr/local/bin/
 ```
 
-#### Tools MCP disponibles
+## Résultats réels
 
-- **`list_traces()`** — Liste les traces en mémoire (URI, durée, nombre d'appels)
-- **`get_last_trace(n)`** — Retourne les N dernières traces avec le call tree complet
-- **`get_trace_by_uri(uri)`** — Recherche les traces par fragment d'URI
+| Trace | Appels bruts | Après filtrage | Réduction |
+|-------|-------------|----------------|-----------|
+| POST /api/admin/clients | 133,000 | 43 | 99.97% |
+| POST /api/auth/login | 102,272 | 29 | 99.97% |
+| GET /api/admin/cases | 133,000 | 43 | 99.97% |
 
-### Options
+## Commandes
 
+```bash
+legacy-map init                  # Setup XDebug + dossier traces
+legacy-map parse <file.xt>       # Parse une trace → JSON stdout
+legacy-map watch <dir>           # Surveille et parse en continu
+legacy-map serve <dir>           # Watcher + MCP server
+legacy-map setup-mcp <dir>       # Configure Claude Code
 ```
---exclude-ns    Namespaces supplémentaires à exclure (ex: Sentry\,Jean85\)
---app-ns        Préfixes namespace applicatif (défaut: App\)
---path-prefix   Préfixe à retirer des chemins de fichiers (défaut: /app/)
---buffer-size   Nombre de traces en mémoire (défaut: 20)
+
+## Comment ça marche
+
+Trois couches de filtrage transforment des centaines de milliers d'appels en quelques dizaines de nœuds :
+
+1. **Fonctions PHP internes** — `strlen`, `array_map`, `sprintf`, etc. sont éliminées
+2. **Namespaces vendor** — `Symfony\`, `Doctrine\`, `Twig\`, `Monolog\`, `Psr\`, `Composer\`, etc. sont exclus
+3. **Collapse sous-arbres** — quand du code `App\` appelle du vendor, seul le point d'entrée est conservé (pas ses centaines d'appels internes)
+
+En plus : les appels répétés consécutifs sont mergés (`call_count`), les external calls dédupliqués, et les valeurs tronquées à 200 chars.
+
+## MCP Tools
+
+- **`list_traces`** — liste les traces en mémoire (URI, durée, stats)
+- **`get_last_trace(n)`** — les N dernières traces avec call tree complet
+- **`get_trace_by_uri(uri)`** — traces matchant une URI (recherche partielle)
+
+## Configuration
+
+```bash
+# Changer le namespace applicatif (défaut: App\)
+legacy-map parse --app-ns=Acme\\ trace.xt
+
+# Exclure des namespaces supplémentaires
+legacy-map parse --exclude-ns=Sentry\\,Jean85\\ trace.xt
+
+# Changer le préfixe de chemin (défaut: /app/)
+legacy-map parse --path-prefix=/var/www/ trace.xt
+
+# Taille du buffer de traces en mémoire (défaut: 20)
+legacy-map serve --buffer-size=50 ./xdebug-traces
 ```
 
-## Ce que le filtre élimine
+## Pré-requis
 
-1. **Fonctions PHP internes** : `strlen`, `array_map`, `sprintf`, etc.
-2. **Namespaces vendor** : `Symfony\`, `Doctrine\`, `Twig\`, `Monolog\`, `Psr\`, `Composer\`, etc.
-3. **Bootstrap** : `require`, `include`, closures vendor, `ComposerAutoloaderInit`
-4. **Sous-arbres vendor** : quand du code `App\` appelle du vendor, seul le nom de l'appel externe est conservé (pas ses 200 appels internes)
-5. **Appels répétés** : 14 appels à `registerBundles` → 1 nœud avec `call_count: 14`
-6. **External calls dédupliqués** : 90 appels à `Route->getDefault` → 1 seule entrée
+- Go 1.22+
+- PHP avec XDebug 3.x
+- Un projet Symfony (ou tout projet PHP)
+
+## Licence
+
+MIT

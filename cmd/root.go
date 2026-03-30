@@ -76,6 +76,11 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 }
 
+// SetVersion sets the version string displayed by --version.
+func SetVersion(v string) {
+	rootCmd.Version = v
+}
+
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
