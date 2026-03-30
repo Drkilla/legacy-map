@@ -37,6 +37,7 @@ Outil CLI Go qui capture et analyse les traces XDebug pour cartographier les flu
 
 ## MCP Tools
 
+- `trigger_trace(url, method, body, headers)` : déclenche une requête HTTP avec XDebug tracing, attend la trace, retourne le call tree
 - `get_last_trace(n)` : N dernières traces avec call tree complet
 - `get_trace_by_uri(uri)` : recherche partielle par URI
 - `list_traces()` : métadonnées uniquement (pas de call tree)

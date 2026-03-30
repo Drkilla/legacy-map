@@ -45,7 +45,9 @@ legacy-map setup-mcp ./xdebug-traces
 ```
 
 Puis dans Claude Code :
-> "Qu'est-ce qui se passe quand je POST sur /api/clients ?"
+> "Retrace moi ce qui se passe quand je POST sur /api/clients"
+
+Claude déclenche automatiquement la requête, capture la trace XDebug, et t'explique le flux.
 
 ## Installation sans Go
 
@@ -93,6 +95,7 @@ En plus : les appels répétés consécutifs sont mergés (`call_count`), les ex
 
 ## MCP Tools
 
+- **`trigger_trace(url, method, body, headers)`** — déclenche une requête HTTP avec XDebug, attend la trace, et retourne le call tree. **La killer feature** : Claude fait tout sans quitter le terminal.
 - **`list_traces`** — liste les traces en mémoire (URI, durée, stats)
 - **`get_last_trace(n)`** — les N dernières traces avec call tree complet
 - **`get_trace_by_uri(uri)`** — traces matchant une URI (recherche partielle)

@@ -1,7 +1,9 @@
 package watcher
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"github.com/drkilla/legacy-map/internal/calltree"
 )
@@ -54,6 +56,36 @@ func (s *Store) Last(n int) []*calltree.TraceResult {
 		results[i] = s.buf[idx]
 	}
 	return results
+}
+
+// Count returns the total number of traces ever written.
+func (s *Store) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.count
+}
+
+// WaitForNew blocks until a new trace is added after countBefore, or ctx is cancelled.
+func (s *Store) WaitForNew(ctx context.Context, countBefore int) (*calltree.TraceResult, bool) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-ticker.C:
+			s.mu.RLock()
+			current := s.count
+			s.mu.RUnlock()
+			if current > countBefore {
+				traces := s.Last(1)
+				if len(traces) > 0 {
+					return traces[0], true
+				}
+			}
+		}
+	}
 }
 
 // All returns all stored trace results (newest first).
