@@ -24,6 +24,8 @@ You trigger a request in your app
    You ask Claude → he explains the flow, generates docs, diagrams
 ```
 
+Works without AI too — `parse` and `watch` output JSON directly, no LLM required.
+
 ## Real-world results
 
 | Endpoint | Raw calls | After filtering | Reduction |
@@ -38,12 +40,7 @@ You trigger a request in your app
 ### 1. Install
 
 ```bash
-# With Go
 go install github.com/drkilla/legacy-map@latest
-
-# Or download the binary
-curl -L https://github.com/drkilla/legacy-map/releases/latest/download/legacy-map-linux-amd64 -o legacy-map
-chmod +x legacy-map && sudo mv legacy-map /usr/local/bin/
 ```
 
 ### 2. Setup in your project
@@ -241,7 +238,7 @@ INSTEAD OF reading source code statically.
 
 ## Prerequisites
 
-- **Go 1.22+** (for `go install`)
+- **Go 1.23+** (for `go install`)
 - **PHP with XDebug 3.x** (on the target project)
 - **Symfony** (or any PHP project — namespace filtering is configurable)
 
