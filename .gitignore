@@ -5,3 +5,6 @@ legacy-map
 *.xt
 xdebug-traces/
 xdebug-traces/*.xt
+
+# Dev scripts
+run-mcp.sh

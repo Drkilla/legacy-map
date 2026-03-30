@@ -10,11 +10,11 @@ import (
 
 // Store is a thread-safe ring buffer of TraceResult.
 type Store struct {
-	mu      sync.RWMutex
-	buf     []*calltree.TraceResult
-	size    int
-	pos     int // next write position
-	count   int // total items written (for knowing if buf is full)
+	mu    sync.RWMutex
+	buf   []*calltree.TraceResult
+	size  int
+	pos   int // next write position
+	count int // total items written (for knowing if buf is full)
 }
 
 // NewStore creates a ring buffer store with the given capacity.
@@ -38,7 +38,12 @@ func (s *Store) Add(r *calltree.TraceResult) {
 func (s *Store) Last(n int) []*calltree.TraceResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.lastN(n)
+}
 
+// lastN is the lock-free internal implementation of Last.
+// Caller must hold at least RLock.
+func (s *Store) lastN(n int) []*calltree.TraceResult {
 	available := s.count
 	if available > s.size {
 		available = s.size
@@ -97,5 +102,5 @@ func (s *Store) All() []*calltree.TraceResult {
 	if available > s.size {
 		available = s.size
 	}
-	return s.Last(available)
+	return s.lastN(available)
 }

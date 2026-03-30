@@ -313,6 +313,7 @@ func handleTriggerTrace(store *watcher.Store, defaultTimeout int) server.ToolHan
 			}
 		} else {
 			statusCode = resp.StatusCode
+			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 		}
 

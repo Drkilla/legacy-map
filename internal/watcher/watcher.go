@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/drkilla/legacy-map/internal/calltree"
@@ -27,6 +28,7 @@ type Watcher struct {
 	cfg          Config
 	store        *Store
 	done         chan struct{}
+	stopOnce     sync.Once
 	gzWarnedOnce bool
 }
 
@@ -94,9 +96,11 @@ func (w *Watcher) Run() error {
 	}
 }
 
-// Stop signals the watcher to stop.
+// Stop signals the watcher to stop. Safe to call multiple times.
 func (w *Watcher) Stop() {
-	close(w.done)
+	w.stopOnce.Do(func() {
+		close(w.done)
+	})
 }
 
 // processExisting processes .xt files already present in the directory.

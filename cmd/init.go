@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -122,10 +123,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr, "📝 Writing configuration...")
 
 	iniContent := fmt.Sprintf(xdebugINITemplate, traceDir)
+	if _, err := os.Stat("xdebug-trace.ini"); err == nil {
+		fmt.Fprint(os.Stderr, "⚠ xdebug-trace.ini already exists. Overwrite? [y/N] ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(os.Stderr, "  Skipped xdebug-trace.ini (already exists)")
+			goto skipINI
+		}
+	}
 	if err := os.WriteFile("xdebug-trace.ini", []byte(iniContent), 0644); err != nil {
 		return fmt.Errorf("write xdebug-trace.ini: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "✓ XDebug trace config written to ./xdebug-trace.ini")
+skipINI:
 
 	// --- Phase 5: Create trace directory ---
 	if err := os.MkdirAll("xdebug-traces", 0755); err != nil {
