@@ -4,3 +4,4 @@ legacy-map
 # XDebug traces
 *.xt
 xdebug-traces/
+xdebug-traces/*.xt
