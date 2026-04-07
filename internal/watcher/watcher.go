@@ -178,13 +178,37 @@ func (w *Watcher) waitForComplete(path string, timeout time.Duration) bool {
 func (w *Watcher) processFile(path string) {
 	start := time.Now()
 
-	entries, err := parser.ParseFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("✗ Open error %s: %v", filepath.Base(path), err)
+		return
+	}
+	defer f.Close()
+
+	var totalRaw int
+	var kept []parser.TraceEntry
+	keptFunctions := make(map[int]bool)
+
+	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
+		if e.IsEntry {
+			totalRaw++
+			if w.cfg.Filter.ShouldKeep(e) {
+				keptFunctions[e.FunctionNr] = true
+				kept = append(kept, e)
+			}
+		} else {
+			if keptFunctions[e.FunctionNr] {
+				kept = append(kept, e)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		log.Printf("✗ Parse error %s: %v", filepath.Base(path), err)
 		return
 	}
 
-	result := calltree.Build(entries, w.cfg.Filter, w.cfg.PathPrefix)
+	result := calltree.BuildFromFiltered(kept, w.cfg.Filter, totalRaw, w.cfg.PathPrefix)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
 	result.HTTPMethod, result.URI = DetectURIFromFilename(path)

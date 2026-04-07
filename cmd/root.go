@@ -97,13 +97,37 @@ func runParse(cmd *cobra.Command, args []string) error {
 	cfg := buildFilterConfig()
 
 	start := time.Now()
-	entries, err := parser.ParseFile(path)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	var totalRaw int
+	var kept []parser.TraceEntry
+	keptFunctions := make(map[int]bool)
+
+	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
+		if e.IsEntry {
+			totalRaw++
+			if cfg.ShouldKeep(e) {
+				keptFunctions[e.FunctionNr] = true
+				kept = append(kept, e)
+			}
+		} else {
+			if keptFunctions[e.FunctionNr] {
+				kept = append(kept, e)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
 	parseDur := time.Since(start)
 
-	result := calltree.Build(entries, cfg, flagPathPrefix)
+	result := calltree.BuildFromFiltered(kept, cfg, totalRaw, flagPathPrefix)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
 	result.Scenario = flagScenario

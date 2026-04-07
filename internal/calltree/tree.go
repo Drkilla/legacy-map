@@ -90,6 +90,34 @@ func Build(entries []parser.TraceEntry, cfg *filter.Config, pathPrefix string) *
 	}
 }
 
+// BuildFromFiltered constructs a CallTree from pre-filtered trace entries.
+// Entries should already have layers 1 & 2 applied (via filter.Config.ShouldKeep).
+// totalRaw is the original unfiltered entry count (for stats).
+func BuildFromFiltered(entries []parser.TraceEntry, cfg *filter.Config, totalRaw int, pathPrefix string) *TraceResult {
+	if len(entries) == 0 {
+		return &TraceResult{TotalCalls: totalRaw}
+	}
+
+	root, _ := buildRawTree(entries)
+	callTree := convertNode(root, cfg, pathPrefix)
+	mergeRepeatedChildren(callTree)
+	services := collectServices(callTree)
+	filteredCount := countNodes(callTree)
+
+	var durationMs float64
+	if root.exitTime > 0 && root.entry.Timestamp > 0 {
+		durationMs = (root.exitTime - root.entry.Timestamp) * 1000
+	}
+
+	return &TraceResult{
+		TotalCalls:    totalRaw,
+		FilteredCalls: filteredCount,
+		DurationMs:    durationMs,
+		CallTree:      callTree,
+		ServicesUsed:  services,
+	}
+}
+
 // buildRawTree reconstructs the parent-child tree from flat TraceEntry lines
 // using FunctionNr to match entry/exit/return.
 func buildRawTree(entries []parser.TraceEntry) (*buildNode, int) {
