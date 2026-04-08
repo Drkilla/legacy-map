@@ -17,10 +17,11 @@ import (
 
 // Config holds watcher configuration.
 type Config struct {
-	Dir        string
-	BufferSize int
-	Filter     *filter.Config
-	PathPrefix string
+	Dir          string
+	BufferSize   int
+	Filter       *filter.Config
+	PathPrefix   string
+	BuildOptions *calltree.BuildOptions
 }
 
 // Watcher watches a directory for new .xt files and processes them.
@@ -208,7 +209,7 @@ func (w *Watcher) processFile(path string) {
 		return
 	}
 
-	result := calltree.BuildFromFiltered(kept, w.cfg.Filter, totalRaw, w.cfg.PathPrefix)
+	result := calltree.BuildFromFiltered(kept, w.cfg.Filter, totalRaw, w.cfg.PathPrefix, w.cfg.BuildOptions)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
 	result.HTTPMethod, result.URI = DetectURIFromFilename(path)

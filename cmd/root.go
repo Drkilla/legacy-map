@@ -51,6 +51,9 @@ var (
 	flagScenario    string
 	flagBufferSize  int
 	flagHTTPTimeout int
+	flagPretty      bool
+	flagReturns     string
+	flagNoCollapse  bool
 )
 
 func init() {
@@ -62,10 +65,16 @@ func init() {
 			"Application namespace prefixes (default: App\\)")
 		cmd.Flags().StringVar(&flagPathPrefix, "path-prefix", "/app/",
 			"Path prefix to strip from filenames to make them relative")
+		cmd.Flags().StringVar(&flagReturns, "returns", "truncate",
+			"Return value mode: truncate (default, 200 chars), type (type only), none (omit)")
+		cmd.Flags().BoolVar(&flagNoCollapse, "no-collapse", false,
+			"Disable collapsing of trivial leaf calls (getters, setters, hydrations)")
 	}
 
 	parseCmd.Flags().StringVar(&flagScenario, "scenario", "",
 		"Optional scenario label (e.g. 'Login flow')")
+	parseCmd.Flags().BoolVar(&flagPretty, "pretty", false,
+		"Pretty-print JSON output (default: compact)")
 
 	for _, cmd := range []*cobra.Command{watchCmd, serveCmd} {
 		cmd.Flags().IntVar(&flagBufferSize, "buffer-size", 20,
@@ -127,7 +136,11 @@ func runParse(cmd *cobra.Command, args []string) error {
 	}
 	parseDur := time.Since(start)
 
-	result := calltree.BuildFromFiltered(kept, cfg, totalRaw, flagPathPrefix)
+	opts := &calltree.BuildOptions{
+		ReturnsMode: flagReturns,
+		Collapse:    !flagNoCollapse,
+	}
+	result := calltree.BuildFromFiltered(kept, cfg, totalRaw, flagPathPrefix, opts)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
 	result.Scenario = flagScenario
@@ -140,8 +153,17 @@ func runParse(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  Services:       %d\n", len(result.ServicesUsed))
 
 	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
+	if flagPretty {
+		enc.SetIndent("", "  ")
+	}
 	return enc.Encode(result)
+}
+
+func buildOptions() *calltree.BuildOptions {
+	return &calltree.BuildOptions{
+		ReturnsMode: flagReturns,
+		Collapse:    !flagNoCollapse,
+	}
 }
 
 func runWatch(cmd *cobra.Command, args []string) error {
@@ -149,10 +171,11 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	cfg := buildFilterConfig()
 
 	w := watcher.New(watcher.Config{
-		Dir:        dir,
-		BufferSize: flagBufferSize,
-		Filter:     cfg,
-		PathPrefix: flagPathPrefix,
+		Dir:          dir,
+		BufferSize:   flagBufferSize,
+		Filter:       cfg,
+		PathPrefix:   flagPathPrefix,
+		BuildOptions: buildOptions(),
 	})
 
 	sigCh := make(chan os.Signal, 1)
@@ -170,11 +193,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 	dir := args[0]
 	cfg := buildFilterConfig()
 
+	// MCP server defaults: returns=type for token efficiency
+	serveOpts := buildOptions()
+	if !cmd.Flags().Changed("returns") {
+		serveOpts.ReturnsMode = "type"
+	}
+
 	w := watcher.New(watcher.Config{
-		Dir:        dir,
-		BufferSize: flagBufferSize,
-		Filter:     cfg,
-		PathPrefix: flagPathPrefix,
+		Dir:          dir,
+		BufferSize:   flagBufferSize,
+		Filter:       cfg,
+		PathPrefix:   flagPathPrefix,
+		BuildOptions: serveOpts,
 	})
 
 	// Start watcher in background

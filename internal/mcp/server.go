@@ -398,7 +398,7 @@ func textResult(text string) *mcp.CallToolResult {
 }
 
 func jsonResult(v any) (*mcp.CallToolResult, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}

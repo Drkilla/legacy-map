@@ -100,9 +100,26 @@ legacy-map parse --app-ns=Acme\\ trace.xt
 # Exclude additional namespaces
 legacy-map parse --exclude-ns=Sentry\\,Jean85\\ trace.xt
 
+# Pretty-print JSON (default: compact)
+legacy-map parse --pretty trace.xt
+
+# Control return values: truncate (default), type (type only), none (omit)
+legacy-map parse --returns=type trace.xt
+legacy-map parse --returns=none trace.xt
+
+# Disable trivial call collapsing (getters/setters/hydrations)
+legacy-map parse --no-collapse trace.xt
+
 # HTTP timeout for slow endpoints (default: 30s)
 legacy-map serve --http-timeout=60 ./xdebug-traces
 ```
+
+### Output optimization
+
+On large traces (1000+ nodes), the default settings optimize for LLM consumption:
+- **Compact JSON** — ~50% smaller than pretty-printed
+- **Trivial call collapse** — getters, setters, `toDomain()`, `toArray()` with <1ms and no children are grouped into a single summary node
+- **MCP server defaults** — uses `--returns=type` automatically (shows `CustomerModel` instead of the full object dump)
 
 ## MCP Tools
 

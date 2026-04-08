@@ -298,6 +298,135 @@ func shallowCopy(node *CallNode, maxDepth int) *CallNode {
 	return &cp
 }
 
+func TestExtractType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"TRUE", "bool"},
+		{"FALSE", "bool"},
+		{"NULL", "null"},
+		{"'hello world'", "string"},
+		{"42", "int"},
+		{"-7", "int"},
+		{"3.14", "float"},
+		{"-0.5", "float"},
+		{"array(3) { [0]=> ... }", "array(3)"},
+		{"array(0) {}", "array(0)"},
+		{`class App\Domain\Customer\CustomerDetailReadModel { ... }`, "CustomerDetailReadModel"},
+		{`class stdClass { ... }`, "stdClass"},
+		{"???", "???"},
+	}
+	for _, tt := range tests {
+		got := ExtractType(tt.input)
+		if got != tt.want {
+			t.Errorf("ExtractType(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestCollapseTrivialCalls(t *testing.T) {
+	// Build a parent with 10 trivial getters and 2 significant children
+	parent := &CallNode{
+		FunctionName: `App\Repository\CaseRepository->findAll`,
+		ClassName:    `App\Repository\CaseRepository`,
+		MethodName:   "findAll",
+	}
+
+	for i := 0; i < 10; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: fmt.Sprintf(`App\Entity\Case->getId`),
+			ClassName:    `App\Entity\Case`,
+			MethodName:   "getId",
+			DurationMs:   0.01,
+		})
+	}
+	parent.Children = append(parent.Children, &CallNode{
+		FunctionName: `App\Service\CaseService->process`,
+		ClassName:    `App\Service\CaseService`,
+		MethodName:   "process",
+		DurationMs:   50.0,
+	})
+
+	collapseTrivialCalls(parent)
+
+	// Should have 2 children: the significant one + 1 collapsed summary
+	if len(parent.Children) != 2 {
+		t.Fatalf("expected 2 children after collapse, got %d", len(parent.Children))
+	}
+
+	// Find the summary node
+	var summary *CallNode
+	for _, c := range parent.Children {
+		if len(c.CollapsedCalls) > 0 {
+			summary = c
+		}
+	}
+	if summary == nil {
+		t.Fatal("no collapsed summary node found")
+	}
+	if summary.CallCount != 10 {
+		t.Errorf("expected CallCount=10, got %d", summary.CallCount)
+	}
+	if len(summary.CollapsedCalls) != 1 {
+		t.Errorf("expected 1 unique collapsed call, got %d: %v", len(summary.CollapsedCalls), summary.CollapsedCalls)
+	}
+}
+
+func TestCollapseTrivialCalls_FewTrivials_NoCollapse(t *testing.T) {
+	parent := &CallNode{FunctionName: "parent"}
+	for i := 0; i < 3; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Entity\Foo->getName`,
+			MethodName:   "getName",
+			DurationMs:   0.01,
+		})
+	}
+
+	collapseTrivialCalls(parent)
+
+	// 3 trivial calls should NOT be collapsed (threshold is >5)
+	if len(parent.Children) != 3 {
+		t.Errorf("expected 3 children (no collapse), got %d", len(parent.Children))
+	}
+}
+
+func TestBuildFromFiltered_ReturnsMode(t *testing.T) {
+	entries, err := parser.ParseFile(testFixturePath)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+
+	cfg := filter.NewDefaultConfig()
+
+	// Mode "none" should omit return values
+	result := BuildWithOptions(entries, cfg, 0, "/var/www/app/", &BuildOptions{
+		ReturnsMode: "none",
+		Collapse:    false,
+	})
+	repo := findNode(result.CallTree, `App\Repository\ReservationRepository->save`)
+	if repo == nil {
+		t.Fatal("could not find ReservationRepository->save")
+	}
+	if repo.ReturnValue != "" {
+		t.Errorf("returns=none: expected empty return, got %q", repo.ReturnValue)
+	}
+
+	// Mode "type" should extract type
+	result2 := BuildWithOptions(entries, cfg, 0, "/var/www/app/", &BuildOptions{
+		ReturnsMode: "type",
+		Collapse:    false,
+	})
+	repo2 := findNode(result2.CallTree, `App\Repository\ReservationRepository->save`)
+	if repo2 == nil {
+		t.Fatal("could not find ReservationRepository->save")
+	}
+	if repo2.ReturnValue != "bool" {
+		t.Errorf("returns=type: expected 'bool' for TRUE, got %q", repo2.ReturnValue)
+	}
+}
+
 func init() {
 	// Silence unused import
 	_ = os.Stdout

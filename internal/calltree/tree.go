@@ -1,25 +1,33 @@
 package calltree
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/drkilla/legacy-map/internal/filter"
 	"github.com/drkilla/legacy-map/internal/parser"
 )
 
+// BuildOptions controls post-processing of the call tree.
+type BuildOptions struct {
+	ReturnsMode string // "truncate" (default), "type", "none"
+	Collapse    bool   // collapse trivial leaf calls (default: true)
+}
+
 // CallNode represents a single function call in the filtered call tree.
 type CallNode struct {
-	FunctionName  string      `json:"function"`
-	ClassName     string      `json:"class,omitempty"`
-	MethodName    string      `json:"method,omitempty"`
-	File          string      `json:"file"`
-	Line          int         `json:"line"`
-	Params        []string    `json:"params,omitempty"`
-	ReturnValue   string      `json:"return,omitempty"`
-	DurationMs    float64     `json:"duration_ms"`
-	CallCount     int         `json:"call_count,omitempty"` // >1 when repeated calls are merged
-	Children      []*CallNode `json:"children,omitempty"`
-	ExternalCalls []string    `json:"external_calls,omitempty"`
+	FunctionName   string      `json:"function"`
+	ClassName      string      `json:"class,omitempty"`
+	MethodName     string      `json:"method,omitempty"`
+	File           string      `json:"file"`
+	Line           int         `json:"line"`
+	Params         []string    `json:"params,omitempty"`
+	ReturnValue    string      `json:"return,omitempty"`
+	DurationMs     float64     `json:"duration_ms"`
+	CallCount      int         `json:"call_count,omitempty"`      // >1 when repeated calls are merged
+	CollapsedCalls []string    `json:"collapsed_calls,omitempty"` // unique method names when trivial calls are collapsed
+	Children       []*CallNode `json:"children,omitempty"`
+	ExternalCalls  []string    `json:"external_calls,omitempty"`
 }
 
 // TraceResult is the top-level output for a parsed and filtered trace.
@@ -56,26 +64,43 @@ type buildNode struct {
 // Build constructs a CallTree from raw trace entries and a filter config.
 // It applies layer 3 collapse (vendor subtrees) and computes durations.
 func Build(entries []parser.TraceEntry, cfg *filter.Config, pathPrefix string) *TraceResult {
+	return BuildWithOptions(entries, cfg, 0, pathPrefix, nil)
+}
+
+// BuildWithOptions constructs a CallTree with configurable post-processing.
+func BuildWithOptions(entries []parser.TraceEntry, cfg *filter.Config, totalRaw int, pathPrefix string, opts *BuildOptions) *TraceResult {
+	if opts == nil {
+		opts = &BuildOptions{ReturnsMode: "truncate", Collapse: true}
+	}
+
 	if len(entries) == 0 {
-		return &TraceResult{}
+		return &TraceResult{TotalCalls: totalRaw}
 	}
 
 	// Phase 1: build raw tree from entries using Level
 	root, totalEntries := buildRawTree(entries)
+	if totalRaw > 0 {
+		totalEntries = totalRaw
+	}
 
 	// Phase 2: convert to CallNode tree with filtering + collapse
-	callTree := convertNode(root, cfg, pathPrefix)
+	callTree := convertNode(root, cfg, pathPrefix, opts.ReturnsMode)
 
 	// Phase 3: merge repeated sibling calls (e.g. registerBundles called 14x)
 	mergeRepeatedChildren(callTree)
 
-	// Phase 4: collect services
+	// Phase 4: collapse trivial leaf calls
+	if opts.Collapse {
+		collapseTrivialCalls(callTree)
+	}
+
+	// Phase 5: collect services
 	services := collectServices(callTree)
 
-	// Phase 5: count filtered entries
+	// Phase 6: count filtered entries
 	filteredCount := countNodes(callTree)
 
-	// Phase 5: compute total duration
+	// Phase 7: compute total duration
 	var durationMs float64
 	if root.exitTime > 0 && root.entry.Timestamp > 0 {
 		durationMs = (root.exitTime - root.entry.Timestamp) * 1000
@@ -93,29 +118,8 @@ func Build(entries []parser.TraceEntry, cfg *filter.Config, pathPrefix string) *
 // BuildFromFiltered constructs a CallTree from pre-filtered trace entries.
 // Entries should already have layers 1 & 2 applied (via filter.Config.ShouldKeep).
 // totalRaw is the original unfiltered entry count (for stats).
-func BuildFromFiltered(entries []parser.TraceEntry, cfg *filter.Config, totalRaw int, pathPrefix string) *TraceResult {
-	if len(entries) == 0 {
-		return &TraceResult{TotalCalls: totalRaw}
-	}
-
-	root, _ := buildRawTree(entries)
-	callTree := convertNode(root, cfg, pathPrefix)
-	mergeRepeatedChildren(callTree)
-	services := collectServices(callTree)
-	filteredCount := countNodes(callTree)
-
-	var durationMs float64
-	if root.exitTime > 0 && root.entry.Timestamp > 0 {
-		durationMs = (root.exitTime - root.entry.Timestamp) * 1000
-	}
-
-	return &TraceResult{
-		TotalCalls:    totalRaw,
-		FilteredCalls: filteredCount,
-		DurationMs:    durationMs,
-		CallTree:      callTree,
-		ServicesUsed:  services,
-	}
+func BuildFromFiltered(entries []parser.TraceEntry, cfg *filter.Config, totalRaw int, pathPrefix string, opts *BuildOptions) *TraceResult {
+	return BuildWithOptions(entries, cfg, totalRaw, pathPrefix, opts)
 }
 
 // buildRawTree reconstructs the parent-child tree from flat TraceEntry lines
@@ -166,7 +170,7 @@ func buildRawTree(entries []parser.TraceEntry) (*buildNode, int) {
 
 // convertNode recursively converts a buildNode tree into a CallNode tree,
 // applying filter layer 3 (vendor collapse).
-func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode {
+func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string, returnsMode string) *CallNode {
 	if bn == nil {
 		return nil
 	}
@@ -178,12 +182,12 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 		}
 		// Usually there's a single root ({main}), return it
 		if len(bn.children) == 1 {
-			return convertNode(bn.children[0], cfg, pathPrefix)
+			return convertNode(bn.children[0], cfg, pathPrefix, returnsMode)
 		}
 		// Multiple roots (shouldn't happen normally): wrap them
 		node := &CallNode{FunctionName: "{root}"}
 		for _, child := range bn.children {
-			if cn := convertNode(child, cfg, pathPrefix); cn != nil {
+			if cn := convertNode(child, cfg, pathPrefix, returnsMode); cn != nil {
 				node.Children = append(node.Children, cn)
 			}
 		}
@@ -197,11 +201,11 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 	// Skip excluded namespace entries and internal functions entirely,
 	// but still recurse into children to find app code buried deeper
 	if isExcluded || isInternal {
-		return promoteAppChildren(bn, cfg, pathPrefix)
+		return promoteAppChildren(bn, cfg, pathPrefix, returnsMode)
 	}
 
 	// This is an app or non-excluded vendor node — build it
-	node := entryToCallNode(bn, pathPrefix)
+	node := entryToCallNode(bn, pathPrefix, returnsMode)
 	extSeen := map[string]bool{} // dedup external calls
 
 	addExternal := func(name string) {
@@ -218,7 +222,7 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 
 		if childIsApp {
 			// App child: recurse normally
-			if cn := convertNode(child, cfg, pathPrefix); cn != nil {
+			if cn := convertNode(child, cfg, pathPrefix, returnsMode); cn != nil {
 				node.Children = append(node.Children, cn)
 			}
 		} else if childIsInternal || childIsExcluded {
@@ -228,7 +232,7 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 				addExternal(child.entry.FunctionName)
 			}
 			// Still promote any app grandchildren buried inside
-			if promoted := promoteAppChildren(child, cfg, pathPrefix); promoted != nil {
+			if promoted := promoteAppChildren(child, cfg, pathPrefix, returnsMode); promoted != nil {
 				if promoted.Children != nil {
 					node.Children = append(node.Children, promoted.Children...)
 				}
@@ -240,7 +244,7 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 				addExternal(child.entry.FunctionName)
 			} else {
 				// vendor calling vendor (not excluded) — still recurse
-				if cn := convertNode(child, cfg, pathPrefix); cn != nil {
+				if cn := convertNode(child, cfg, pathPrefix, returnsMode); cn != nil {
 					node.Children = append(node.Children, cn)
 				}
 			}
@@ -252,16 +256,16 @@ func convertNode(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode
 
 // promoteAppChildren finds app-code descendants inside a non-app subtree
 // and returns them as a virtual wrapper (or nil if none found).
-func promoteAppChildren(bn *buildNode, cfg *filter.Config, pathPrefix string) *CallNode {
+func promoteAppChildren(bn *buildNode, cfg *filter.Config, pathPrefix string, returnsMode string) *CallNode {
 	var promoted []*CallNode
 	for _, child := range bn.children {
 		if cfg.IsAppCode(child.entry.FunctionName) {
-			if cn := convertNode(child, cfg, pathPrefix); cn != nil {
+			if cn := convertNode(child, cfg, pathPrefix, returnsMode); cn != nil {
 				promoted = append(promoted, cn)
 			}
 		} else {
 			// Recurse deeper
-			if wrapper := promoteAppChildren(child, cfg, pathPrefix); wrapper != nil {
+			if wrapper := promoteAppChildren(child, cfg, pathPrefix, returnsMode); wrapper != nil {
 				promoted = append(promoted, wrapper.Children...)
 			}
 		}
@@ -273,7 +277,7 @@ func promoteAppChildren(bn *buildNode, cfg *filter.Config, pathPrefix string) *C
 }
 
 // entryToCallNode creates a CallNode from a buildNode.
-func entryToCallNode(bn *buildNode, pathPrefix string) *CallNode {
+func entryToCallNode(bn *buildNode, pathPrefix string, returnsMode string) *CallNode {
 	className, methodName := splitFunctionName(bn.entry.FunctionName)
 
 	var durationMs float64
@@ -286,6 +290,16 @@ func entryToCallNode(bn *buildNode, pathPrefix string) *CallNode {
 		file = strings.TrimPrefix(file, pathPrefix)
 	}
 
+	var retVal string
+	switch returnsMode {
+	case "none":
+		// omit
+	case "type":
+		retVal = ExtractType(bn.returnVal)
+	default: // "truncate"
+		retVal = truncate(bn.returnVal, maxValueLen)
+	}
+
 	return &CallNode{
 		FunctionName: bn.entry.FunctionName,
 		ClassName:    className,
@@ -293,9 +307,48 @@ func entryToCallNode(bn *buildNode, pathPrefix string) *CallNode {
 		File:         file,
 		Line:         bn.entry.LineNumber,
 		Params:       truncateStrings(bn.entry.Params, maxValueLen),
-		ReturnValue:  truncate(bn.returnVal, maxValueLen),
+		ReturnValue:  retVal,
 		DurationMs:   durationMs,
 	}
+}
+
+// ExtractType extracts the type from an XDebug return value string.
+func ExtractType(val string) string {
+	if val == "" {
+		return ""
+	}
+	if val == "TRUE" || val == "FALSE" {
+		return "bool"
+	}
+	if val == "NULL" {
+		return "null"
+	}
+	if strings.HasPrefix(val, "'") {
+		return "string"
+	}
+	if strings.HasPrefix(val, "array(") {
+		if idx := strings.Index(val, ")"); idx != -1 {
+			return val[:idx+1]
+		}
+		return "array"
+	}
+	if strings.HasPrefix(val, "class ") {
+		parts := strings.Fields(val)
+		if len(parts) >= 2 {
+			fqcn := parts[1]
+			if idx := strings.LastIndex(fqcn, "\\"); idx != -1 {
+				return fqcn[idx+1:]
+			}
+			return fqcn
+		}
+	}
+	if len(val) > 0 && (val[0] >= '0' && val[0] <= '9' || val[0] == '-') {
+		if strings.Contains(val, ".") {
+			return "float"
+		}
+		return "int"
+	}
+	return truncate(val, 50)
 }
 
 const maxValueLen = 200
@@ -446,4 +499,77 @@ func mergeRepeatedChildren(node *CallNode) {
 	}
 
 	node.Children = merged
+}
+
+// collapseTrivialCalls replaces groups of trivial leaf children (getters, setters,
+// hydration methods) with a single summary node to reduce noise.
+func collapseTrivialCalls(node *CallNode) {
+	if node == nil || len(node.Children) == 0 {
+		return
+	}
+
+	var trivial []*CallNode
+	var significant []*CallNode
+
+	for _, child := range node.Children {
+		if isTrivialCall(child) {
+			trivial = append(trivial, child)
+		} else {
+			significant = append(significant, child)
+			collapseTrivialCalls(child) // recurse on significant children
+		}
+	}
+
+	// Only collapse if there are more than 5 trivial calls
+	if len(trivial) > 5 {
+		var totalDuration float64
+		var totalCount int
+		seen := map[string]bool{}
+		var uniqueNames []string
+
+		for _, t := range trivial {
+			totalDuration += t.DurationMs
+			count := t.CallCount
+			if count == 0 {
+				count = 1
+			}
+			totalCount += count
+
+			name := t.FunctionName
+			if !seen[name] {
+				seen[name] = true
+				uniqueNames = append(uniqueNames, name)
+			}
+		}
+
+		summary := &CallNode{
+			FunctionName:   fmt.Sprintf("[%d trivial calls collapsed]", totalCount),
+			CollapsedCalls: uniqueNames,
+			CallCount:      totalCount,
+			DurationMs:     totalDuration,
+		}
+		node.Children = append(significant, summary)
+	} else {
+		// Few trivial calls, keep them as-is
+		node.Children = append(significant, trivial...)
+	}
+}
+
+// isTrivialCall returns true if the node is a leaf with < 1ms duration
+// and a trivial method name (getter, setter, hydration).
+func isTrivialCall(node *CallNode) bool {
+	if len(node.Children) > 0 {
+		return false // has sub-calls, not trivial
+	}
+	if node.DurationMs > 1.0 {
+		return false // takes time, potentially interesting
+	}
+	method := node.MethodName
+	return strings.HasPrefix(method, "get") ||
+		strings.HasPrefix(method, "set") ||
+		strings.HasPrefix(method, "is") ||
+		strings.HasPrefix(method, "has") ||
+		method == "toDomain" ||
+		method == "toArray" ||
+		method == "__toString"
 }
