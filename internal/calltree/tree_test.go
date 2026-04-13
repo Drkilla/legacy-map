@@ -463,6 +463,184 @@ func TestCollapseTrivialSubtree_Recursive(t *testing.T) {
 	}
 }
 
+// --- Repetitive subtree collapse tests ---
+
+func TestCollapseRepetitiveSubtrees(t *testing.T) {
+	parent := &CallNode{FunctionName: "parent"}
+	for i := 0; i < 20; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Connector\Wshop\WshopCustomerPayload::fromArray`,
+			DurationMs:   float64(i + 1),
+			Children: []*CallNode{
+				{
+					FunctionName: `App\Connector\Wshop\WshopCustomerAggregateMapper->map`,
+					Children: []*CallNode{
+						{FunctionName: `App\Connector\Wshop\WshopCustomerAggregateMapper->resolveFullName`},
+						{FunctionName: `App\Connector\Wshop\WshopCustomerAggregateMapper->resolveInvoiceAddress`},
+						{FunctionName: `App\Connector\Wshop\WshopCustomerAggregateMapper->resolveZipCode`},
+					},
+				},
+				{FunctionName: `App\Customer\ReadModel\CustomerDetailReadModel->__construct`},
+			},
+		})
+	}
+
+	collapseRepetitiveSubtrees(parent)
+
+	if len(parent.Children) != 1 {
+		t.Fatalf("expected 1 representative, got %d", len(parent.Children))
+	}
+	rep := parent.Children[0]
+	if rep.RepeatCount != 20 {
+		t.Errorf("expected RepeatCount=20, got %d", rep.RepeatCount)
+	}
+	// Duration should be sum of all 20 (1+2+...+20 = 210)
+	if rep.DurationMs != 210 {
+		t.Errorf("expected DurationMs=210, got %f", rep.DurationMs)
+	}
+	// Children structure preserved from first occurrence
+	if len(rep.Children) != 2 {
+		t.Errorf("expected 2 children on representative, got %d", len(rep.Children))
+	}
+}
+
+func TestCollapseRepetitive_MixedChildren(t *testing.T) {
+	parent := &CallNode{FunctionName: "parent"}
+
+	// 20 identical subtrees
+	for i := 0; i < 20; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Mapper->map`,
+			DurationMs:   1.0,
+			Children:     []*CallNode{{FunctionName: `App\Entity->__construct`}},
+		})
+	}
+	// 3 different children
+	parent.Children = append(parent.Children,
+		&CallNode{FunctionName: `App\Service\FavoriteService->check`, DurationMs: 5.0},
+		&CallNode{FunctionName: `App\Service\NoteService->load`, DurationMs: 3.0},
+		&CallNode{FunctionName: `App\Service\ReminderService->load`, DurationMs: 2.0},
+	)
+
+	collapseRepetitiveSubtrees(parent)
+
+	// 1 representative (×20) + 3 different = 4
+	if len(parent.Children) != 4 {
+		t.Fatalf("expected 4 children, got %d", len(parent.Children))
+	}
+	if parent.Children[0].RepeatCount != 20 {
+		t.Errorf("expected RepeatCount=20 on first child, got %d", parent.Children[0].RepeatCount)
+	}
+	if parent.Children[0].DurationMs != 20.0 {
+		t.Errorf("expected DurationMs=20, got %f", parent.Children[0].DurationMs)
+	}
+	// The 3 unique nodes should have no RepeatCount
+	for i := 1; i < 4; i++ {
+		if parent.Children[i].RepeatCount != 0 {
+			t.Errorf("child %d should not have RepeatCount, got %d", i, parent.Children[i].RepeatCount)
+		}
+	}
+}
+
+func TestCollapseRepetitive_TooFew(t *testing.T) {
+	parent := &CallNode{FunctionName: "parent"}
+	for i := 0; i < 2; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Mapper->map`,
+			DurationMs:   1.0,
+		})
+	}
+
+	collapseRepetitiveSubtrees(parent)
+
+	// 2 is not >2, no collapse
+	if len(parent.Children) != 2 {
+		t.Fatalf("expected 2 children (no collapse), got %d", len(parent.Children))
+	}
+	for _, c := range parent.Children {
+		if c.RepeatCount != 0 {
+			t.Errorf("should not have RepeatCount, got %d", c.RepeatCount)
+		}
+	}
+}
+
+func TestCollapseRepetitive_NonConsecutive(t *testing.T) {
+	parent := &CallNode{FunctionName: "parent"}
+	// Interleave: mapper, logger, mapper, logger, mapper, logger, mapper
+	for i := 0; i < 4; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Mapper->map`,
+			DurationMs:   1.0,
+			Children:     []*CallNode{{FunctionName: `App\Entity->__construct`}},
+		})
+		if i < 3 {
+			parent.Children = append(parent.Children, &CallNode{
+				FunctionName: `App\Logger->debug`,
+				DurationMs:   0.1,
+			})
+		}
+	}
+	// 4 mapper + 3 logger = 7 children
+
+	collapseRepetitiveSubtrees(parent)
+
+	// mappers (4 > 2) → collapsed, loggers (3 > 2) → collapsed = 2
+	if len(parent.Children) != 2 {
+		t.Fatalf("expected 2 children after non-consecutive collapse, got %d", len(parent.Children))
+	}
+
+	var mapperRep, loggerRep *CallNode
+	for _, c := range parent.Children {
+		if c.FunctionName == `App\Mapper->map` {
+			mapperRep = c
+		}
+		if c.FunctionName == `App\Logger->debug` {
+			loggerRep = c
+		}
+	}
+	if mapperRep == nil || mapperRep.RepeatCount != 4 {
+		t.Errorf("expected mapper RepeatCount=4, got %v", mapperRep)
+	}
+	if loggerRep == nil || loggerRep.RepeatCount != 3 {
+		t.Errorf("expected logger RepeatCount=3, got %v", loggerRep)
+	}
+}
+
+func TestSubtreeSignature(t *testing.T) {
+	// Two structurally identical trees with different params/durations
+	tree1 := &CallNode{
+		FunctionName: `App\Mapper->map`, DurationMs: 1.0, Params: []string{"foo"},
+		Children: []*CallNode{
+			{FunctionName: `App\Entity->__construct`, DurationMs: 0.1, ReturnValue: "Entity"},
+		},
+	}
+	tree2 := &CallNode{
+		FunctionName: `App\Mapper->map`, DurationMs: 99.0, Params: []string{"bar", "baz"},
+		Children: []*CallNode{
+			{FunctionName: `App\Entity->__construct`, DurationMs: 50.0, ReturnValue: "Other"},
+		},
+	}
+	// Structurally different tree
+	tree3 := &CallNode{
+		FunctionName: `App\Mapper->map`,
+		Children: []*CallNode{
+			{FunctionName: `App\Entity->__construct`},
+			{FunctionName: `App\Validator->validate`},
+		},
+	}
+
+	sig1 := subtreeSignature(tree1)
+	sig2 := subtreeSignature(tree2)
+	sig3 := subtreeSignature(tree3)
+
+	if sig1 != sig2 {
+		t.Errorf("structurally identical trees should have same signature:\n  %s\n  %s", sig1, sig2)
+	}
+	if sig1 == sig3 {
+		t.Error("structurally different trees should have different signatures")
+	}
+}
+
 func TestIsTrivialSubtree(t *testing.T) {
 	trivial := &CallNode{
 		MethodName: "toDomain", DurationMs: 0.1,

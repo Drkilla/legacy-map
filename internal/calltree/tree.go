@@ -25,6 +25,7 @@ type CallNode struct {
 	ReturnValue    string      `json:"return,omitempty"`
 	DurationMs     float64     `json:"duration_ms"`
 	CallCount      int         `json:"call_count,omitempty"`      // >1 when repeated calls are merged
+	RepeatCount    int         `json:"repeat_count,omitempty"`    // >1 when identical subtrees are collapsed
 	CollapsedCalls []string    `json:"collapsed_calls,omitempty"` // unique method names when trivial calls are collapsed
 	Children       []*CallNode `json:"children,omitempty"`
 	ExternalCalls  []string    `json:"external_calls,omitempty"`
@@ -92,6 +93,11 @@ func BuildWithOptions(entries []parser.TraceEntry, cfg *filter.Config, totalRaw 
 	// Phase 4: collapse trivial leaf calls
 	if opts.Collapse {
 		collapseTrivialCalls(callTree)
+	}
+
+	// Phase 4b: collapse repetitive subtrees (identical siblings → single representative)
+	if opts.Collapse {
+		collapseRepetitiveSubtrees(callTree)
 	}
 
 	// Phase 5: collect services
@@ -594,5 +600,102 @@ func collectTrivialNames(node *CallNode, seen map[string]bool, uniqueNames *[]st
 	}
 	for _, child := range node.Children {
 		collectTrivialNames(child, seen, uniqueNames)
+	}
+}
+
+// collapseRepetitiveSubtrees detects sibling nodes with structurally identical
+// subtrees and replaces them with a single representative annotated with RepeatCount.
+// "Structurally identical" means same FunctionName and same recursive child structure;
+// params, return values, and durations are ignored.
+func collapseRepetitiveSubtrees(node *CallNode) {
+	if node == nil || len(node.Children) == 0 {
+		return
+	}
+
+	// Recurse depth-first so children are already collapsed
+	for _, child := range node.Children {
+		collapseRepetitiveSubtrees(child)
+	}
+
+	if len(node.Children) < 3 {
+		return
+	}
+
+	// Group all children by structural signature
+	type sigGroup struct {
+		nodes []*CallNode
+	}
+	groups := map[string]*sigGroup{}
+	sigOrder := make([]string, 0)
+
+	for _, child := range node.Children {
+		sig := subtreeSignature(child)
+		if g, ok := groups[sig]; ok {
+			g.nodes = append(g.nodes, child)
+		} else {
+			groups[sig] = &sigGroup{nodes: []*CallNode{child}}
+			sigOrder = append(sigOrder, sig)
+		}
+	}
+
+	// Check if any signature repeats >2 times
+	repeatedSigs := map[string]bool{}
+	for sig, g := range groups {
+		if len(g.nodes) > 2 {
+			repeatedSigs[sig] = true
+		}
+	}
+	if len(repeatedSigs) == 0 {
+		return
+	}
+
+	// Rebuild children: non-repeated stay in place, repeated replaced by first occurrence
+	seen := map[string]bool{}
+	result := make([]*CallNode, 0, len(node.Children))
+
+	for _, child := range node.Children {
+		sig := subtreeSignature(child)
+		if !repeatedSigs[sig] {
+			result = append(result, child)
+			continue
+		}
+		if seen[sig] {
+			continue // already emitted the representative
+		}
+		seen[sig] = true
+
+		group := groups[sig]
+		representative := group.nodes[0]
+		var totalDuration float64
+		for _, n := range group.nodes {
+			totalDuration += n.DurationMs
+		}
+		representative.DurationMs = totalDuration
+		representative.RepeatCount = len(group.nodes)
+		result = append(result, representative)
+	}
+
+	node.Children = result
+}
+
+// subtreeSignature generates a string key representing the structural shape
+// of a subtree (function names and child structure only — no params/returns/durations).
+func subtreeSignature(node *CallNode) string {
+	var buf strings.Builder
+	buildSignature(node, &buf)
+	return buf.String()
+}
+
+func buildSignature(node *CallNode, buf *strings.Builder) {
+	buf.WriteString(node.FunctionName)
+	if len(node.Children) > 0 {
+		buf.WriteByte('(')
+		for i, child := range node.Children {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buildSignature(child, buf)
+		}
+		buf.WriteByte(')')
 	}
 }
