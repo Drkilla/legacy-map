@@ -8,6 +8,7 @@ import (
 
 // DefaultExcludedNamespaces is the list of namespaces excluded by default (layer 2).
 var DefaultExcludedNamespaces = []string{
+	// Symfony core
 	`Symfony\`,
 	`Doctrine\`,
 	`Twig\`,
@@ -19,6 +20,21 @@ var DefaultExcludedNamespaces = []string{
 	`Webmozart\`,
 	`DeepCopy\`,
 	`ComposerAutoloaderInit`, // Composer generated autoloader class
+
+	// Common bundles & libraries
+	`OpenApi\`,
+	`Nelmio\`,
+	`Lexik\`,
+	`Proxies\`,
+	`GuzzleHttp\`,
+	`Elasticsearch\`,
+	`Lcobucci\`,
+	`Ramsey\`,
+
+	// PHP SOAP
+	`SoapFault`,
+	`SoapClient`,
+	`SoapVar`,
 }
 
 // DefaultExcludedFunctions are exact function names to exclude.
@@ -74,9 +90,38 @@ func (c *Config) IsAppCode(funcName string) bool {
 	return c.AppPrefixes.HasPrefix(funcName)
 }
 
+// isCompiledContainer detects Symfony's compiled DI container classes,
+// which use a dynamic namespace like ContainerDmKuytK\, ContainerABC123\, etc.
+// Pattern: "Container" + [A-Za-z0-9_]{4,20} + "\".
+func isCompiledContainer(functionName string) bool {
+	const prefix = "Container"
+	if !strings.HasPrefix(functionName, prefix) {
+		return false
+	}
+	idx := strings.Index(functionName, `\`)
+	if idx == -1 {
+		return false
+	}
+	hash := functionName[len(prefix):idx]
+	if len(hash) < 4 || len(hash) > 20 {
+		return false
+	}
+	for _, c := range hash {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // IsExcluded returns true if the function should be excluded.
-// Checks: namespace prefix, exact function name, vendor closures.
+// Checks: namespace prefix, exact function name, vendor closures, compiled container.
 func (c *Config) IsExcluded(funcName string) bool {
+	// Compiled Symfony DI container (always-on, non-configurable framework noise)
+	if isCompiledContainer(funcName) {
+		return true
+	}
+
 	// Namespace prefix match
 	if c.ExcludedNamespaces.HasPrefix(funcName) {
 		return true

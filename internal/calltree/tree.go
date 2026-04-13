@@ -512,7 +512,7 @@ func collapseTrivialCalls(node *CallNode) {
 	var significant []*CallNode
 
 	for _, child := range node.Children {
-		if isTrivialCall(child) {
+		if isTrivialSubtree(child) {
 			trivial = append(trivial, child)
 		} else {
 			significant = append(significant, child)
@@ -535,11 +535,7 @@ func collapseTrivialCalls(node *CallNode) {
 			}
 			totalCount += count
 
-			name := t.FunctionName
-			if !seen[name] {
-				seen[name] = true
-				uniqueNames = append(uniqueNames, name)
-			}
+			collectTrivialNames(t, seen, &uniqueNames)
 		}
 
 		summary := &CallNode{
@@ -555,14 +551,11 @@ func collapseTrivialCalls(node *CallNode) {
 	}
 }
 
-// isTrivialCall returns true if the node is a leaf with < 1ms duration
-// and a trivial method name (getter, setter, hydration).
-func isTrivialCall(node *CallNode) bool {
-	if len(node.Children) > 0 {
-		return false // has sub-calls, not trivial
-	}
+// isTrivialMethod returns true if the node itself looks trivial: a short
+// accessor/hydrator/constructor under 1ms. Does not look at children.
+func isTrivialMethod(node *CallNode) bool {
 	if node.DurationMs > 1.0 {
-		return false // takes time, potentially interesting
+		return false
 	}
 	method := node.MethodName
 	return strings.HasPrefix(method, "get") ||
@@ -571,5 +564,35 @@ func isTrivialCall(node *CallNode) bool {
 		strings.HasPrefix(method, "has") ||
 		method == "toDomain" ||
 		method == "toArray" ||
-		method == "__toString"
+		method == "__construct" ||
+		method == "__toString" ||
+		method == "__destruct"
+}
+
+// isTrivialSubtree returns true if the node AND all its descendants are
+// trivial. A constructor whose body only assigns properties is trivial;
+// a constructor that triggers an HTTP call is not (one of its descendants
+// will fail isTrivialMethod).
+func isTrivialSubtree(node *CallNode) bool {
+	if !isTrivialMethod(node) {
+		return false
+	}
+	for _, child := range node.Children {
+		if !isTrivialSubtree(child) {
+			return false
+		}
+	}
+	return true
+}
+
+// collectTrivialNames walks a trivial subtree and appends every unique
+// method name it encounters into uniqueNames (via the seen set).
+func collectTrivialNames(node *CallNode, seen map[string]bool, uniqueNames *[]string) {
+	if !seen[node.FunctionName] {
+		seen[node.FunctionName] = true
+		*uniqueNames = append(*uniqueNames, node.FunctionName)
+	}
+	for _, child := range node.Children {
+		collectTrivialNames(child, seen, uniqueNames)
+	}
 }

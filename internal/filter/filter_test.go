@@ -130,3 +130,53 @@ func TestNewConfig_CustomNamespaces(t *testing.T) {
 		t.Error("default App prefix should not match with custom config")
 	}
 }
+
+func TestIsCompiledContainer(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"symfony compiled container with hash", `ContainerDmKuytK\Something`, true},
+		{"alphanumeric hash", `ContainerABC123\Foo`, true},
+		{"no hash between Container and backslash", `Container\Foo`, false},
+		{"not a prefix", `App\Container\Foo`, false},
+		{"no backslash", "ContainerFactory", false},
+		{"hash too short", `ContainerAB\Foo`, false},
+		{"hash too long", `ContainerABCDEFGHIJKLMNOPQRSTUV\Foo`, false},
+		{"non-alphanumeric char in hash", `ContainerAB-CD\Foo`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCompiledContainer(tc.in); got != tc.want {
+				t.Errorf("isCompiledContainer(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsExcluded_CompiledContainer(t *testing.T) {
+	cfg := NewDefaultConfig()
+	if !cfg.IsExcluded(`ContainerDmKuytK\getFooService`) {
+		t.Error("compiled container class should be excluded")
+	}
+}
+
+func TestIsExcluded_NewDefaultNamespaces(t *testing.T) {
+	cfg := NewDefaultConfig()
+	for _, fn := range []string{
+		`OpenApi\Annotations\Info`,
+		`Nelmio\ApiDocBundle\Foo`,
+		`Lexik\Bundle\JWTAuthenticationBundle\Foo`,
+		`Proxies\__CG__\App\Entity\Foo`,
+		`GuzzleHttp\Client->send`,
+		`Elasticsearch\Client->search`,
+		`Lcobucci\JWT\Token`,
+		`Ramsey\Uuid\Uuid`,
+		`SoapClient->__call`,
+	} {
+		if !cfg.IsExcluded(fn) {
+			t.Errorf("%q should be excluded by default", fn)
+		}
+	}
+}

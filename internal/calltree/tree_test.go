@@ -431,3 +431,63 @@ func init() {
 	// Silence unused import
 	_ = os.Stdout
 }
+
+func TestCollapseTrivialSubtree_Recursive(t *testing.T) {
+	// 10 x (toDomain -> __construct), all <1ms → entire subtrees trivial → collapse
+	parent := &CallNode{FunctionName: "parent"}
+	for i := 0; i < 10; i++ {
+		parent.Children = append(parent.Children, &CallNode{
+			FunctionName: `App\Entity\Settings->toDomain`,
+			MethodName:   "toDomain",
+			DurationMs:   0.02,
+			Children: []*CallNode{{
+				FunctionName: `App\Domain\Settings->__construct`,
+				MethodName:   "__construct",
+				DurationMs:   0.01,
+			}},
+		})
+	}
+
+	collapseTrivialCalls(parent)
+
+	if len(parent.Children) != 1 {
+		t.Fatalf("expected 1 summary child after recursive collapse, got %d", len(parent.Children))
+	}
+	summary := parent.Children[0]
+	if summary.CallCount != 10 {
+		t.Errorf("expected CallCount=10, got %d", summary.CallCount)
+	}
+	// Collapsed names should cover both toDomain and __construct
+	if len(summary.CollapsedCalls) < 2 {
+		t.Errorf("expected collapsed names to include both methods, got %v", summary.CollapsedCalls)
+	}
+}
+
+func TestIsTrivialSubtree(t *testing.T) {
+	trivial := &CallNode{
+		MethodName: "toDomain", DurationMs: 0.1,
+		Children: []*CallNode{{MethodName: "__construct", DurationMs: 0.1}},
+	}
+	if !isTrivialSubtree(trivial) {
+		t.Error("toDomain→__construct should be trivial")
+	}
+
+	withHTTP := &CallNode{
+		MethodName: "toDomain", DurationMs: 0.1,
+		Children: []*CallNode{{MethodName: "httpCall", DurationMs: 10}},
+	}
+	if isTrivialSubtree(withHTTP) {
+		t.Error("toDomain with httpCall child should NOT be trivial")
+	}
+
+	deepHTTP := &CallNode{
+		MethodName: "toDomain", DurationMs: 0.1,
+		Children: []*CallNode{{
+			MethodName: "__construct", DurationMs: 0.1,
+			Children: []*CallNode{{MethodName: "httpCall", DurationMs: 5}},
+		}},
+	}
+	if isTrivialSubtree(deepHTTP) {
+		t.Error("trivial wrapper over deep httpCall should NOT be trivial (recursive)")
+	}
+}
