@@ -235,12 +235,21 @@ func findNode(node *CallNode, funcName string) *CallNode {
 
 // --- Real trace integration test ---
 
-const realTraceDir = "/home/drkilla/projects/ezyformalite/xdebug-traces"
+// realTraceDir is configured via the LEGACY_MAP_REAL_TRACES env var.
+func realTraceDir(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("LEGACY_MAP_REAL_TRACES")
+	if dir == "" {
+		t.Skip("LEGACY_MAP_REAL_TRACES not set — skipping real trace integration test")
+	}
+	return dir
+}
 
 func TestBuild_RealTrace(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join(realTraceDir, "*.xt"))
+	dir := realTraceDir(t)
+	files, err := filepath.Glob(filepath.Join(dir, "*.xt"))
 	if err != nil || len(files) == 0 {
-		t.Skipf("no .xt files in %s", realTraceDir)
+		t.Skipf("no .xt files in %s", dir)
 	}
 
 	cfg := filter.NewDefaultConfig()
@@ -425,11 +434,6 @@ func TestBuildFromFiltered_ReturnsMode(t *testing.T) {
 	if repo2.ReturnValue != "bool" {
 		t.Errorf("returns=type: expected 'bool' for TRUE, got %q", repo2.ReturnValue)
 	}
-}
-
-func init() {
-	// Silence unused import
-	_ = os.Stdout
 }
 
 func TestCollapseTrivialSubtree_Recursive(t *testing.T) {

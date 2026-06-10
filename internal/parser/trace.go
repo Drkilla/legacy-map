@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +27,10 @@ type TraceEntry struct {
 	ReturnValue  string // only for IsReturn
 }
 
-const defaultScanBufferSize = 1024 * 1024 // 1 MB — trace lines with many params can be long
+const (
+	initialScanBufferSize = 256 * 1024       // 256 KB initial allocation
+	maxScanBufferSize     = 16 * 1024 * 1024 // 16 MB — trace lines with huge serialized params can be very long
+)
 
 // ParseFile parses an entire XDebug trace file and returns all entries.
 // For large files, prefer ParseStream.
@@ -52,7 +56,7 @@ func ParseFile(path string) ([]TraceEntry, error) {
 // the callback for each parsed entry. It never loads the entire file into memory.
 func ParseStream(r io.Reader, callback func(TraceEntry) error) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, defaultScanBufferSize), defaultScanBufferSize)
+	scanner.Buffer(make([]byte, initialScanBufferSize), maxScanBufferSize)
 
 	// Skip 3-line header: Version, File format, TRACE START
 	for i := 0; i < 3; i++ {
@@ -84,7 +88,13 @@ func ParseStream(r io.Reader, callback func(TraceEntry) error) error {
 		}
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("line %d exceeds %d MB — reduce xdebug.var_display_max_data or disable xdebug.collect_params", lineNum+1, maxScanBufferSize/(1024*1024))
+		}
+		return err
+	}
+	return nil
 }
 
 // parseLine parses a single tab-separated trace line into a TraceEntry.

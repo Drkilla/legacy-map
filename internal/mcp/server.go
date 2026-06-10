@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,8 +20,12 @@ import (
 
 // NewServer creates an MCP server wired to the given trace store.
 // httpTimeout is the default HTTP timeout for trigger_trace (in seconds).
-func NewServer(store *watcher.Store, httpTimeout int) *server.MCPServer {
-	s := server.NewMCPServer("legacy-map", "0.1.0")
+// version is the legacy-map binary version reported to MCP clients.
+func NewServer(store *watcher.Store, httpTimeout int, version string) *server.MCPServer {
+	if version == "" {
+		version = "dev"
+	}
+	s := server.NewMCPServer("legacy-map", version)
 
 	s.AddTool(toolGetLastTrace(), handleGetLastTrace(store))
 	s.AddTool(toolGetTraceByURI(), handleGetTraceByURI(store))
@@ -327,6 +333,15 @@ func handleTriggerTrace(store *watcher.Store, defaultTimeout int) server.ToolHan
 
 		trace, ok := store.WaitForNew(waitCtx, countBefore)
 
+		// Enrich the trace with request context: the filename-based detection
+		// can't know the HTTP method, but trigger_trace does
+		if ok && trace != nil {
+			trace.HTTPMethod = method
+			if trace.URI == "" {
+				trace.URI = u.Path
+			}
+		}
+
 		if httpTimedOut && ok {
 			// HTTP timed out but trace was captured
 			type triggerResult struct {
@@ -383,8 +398,11 @@ func isTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "Client.Timeout") ||
-		strings.Contains(err.Error(), "context deadline exceeded")
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // --- Helpers ---

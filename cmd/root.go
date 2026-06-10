@@ -166,8 +166,23 @@ func buildOptions() *calltree.BuildOptions {
 	}
 }
 
+// validateTraceDir ensures the watched directory exists before starting.
+func validateTraceDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("trace directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("trace directory %s is not a directory", dir)
+	}
+	return nil
+}
+
 func runWatch(cmd *cobra.Command, args []string) error {
 	dir := args[0]
+	if err := validateTraceDir(dir); err != nil {
+		return err
+	}
 	cfg := buildFilterConfig()
 
 	w := watcher.New(watcher.Config{
@@ -191,6 +206,9 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	dir := args[0]
+	if err := validateTraceDir(dir); err != nil {
+		return err
+	}
 	cfg := buildFilterConfig()
 
 	// MCP server defaults: returns=type for token efficiency
@@ -207,16 +225,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 		BuildOptions: serveOpts,
 	})
 
-	// Start watcher in background
-	watchErr := make(chan error, 1)
+	log.SetOutput(os.Stderr) // Keep log output on stderr, stdio is for MCP
+
+	// Start watcher in background — a watcher failure must be visible,
+	// otherwise the MCP server keeps running without ever capturing traces
 	go func() {
-		watchErr <- w.Run()
+		if err := w.Run(); err != nil {
+			log.Printf("✗ Watcher stopped: %v — traces will no longer be captured", err)
+		}
 	}()
 
 	// Create and start MCP server on stdio
-	mcpSrv := mcpserver.NewServer(w.Store(), flagHTTPTimeout)
-
-	log.SetOutput(os.Stderr) // Keep log output on stderr, stdio is for MCP
+	mcpSrv := mcpserver.NewServer(w.Store(), flagHTTPTimeout, rootCmd.Version)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
