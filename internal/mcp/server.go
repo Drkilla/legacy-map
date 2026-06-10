@@ -372,7 +372,6 @@ func handleTriggerTrace(store *watcher.Store, defaultTimeout int) server.ToolHan
 					"Checklist:\n"+
 					"  - XDebug is installed and enabled (xdebug.mode=trace)\n"+
 					"  - xdebug.start_with_request=trigger is configured\n"+
-					"  - xdebug.use_compression=0 is set (legacy-map cannot read .xt.gz files)\n"+
 					"  - trace_output_dir points to the directory watched by legacy-map\n"+
 					"  - PHP was restarted after configuration changes",
 				method, rawURL, statusCode, int(waitDuration.Seconds()),

@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"compress/gzip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -215,5 +218,46 @@ func TestParseStream_TruncatedHeader(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error on truncated header")
+	}
+}
+
+func TestParseFile_Gzip(t *testing.T) {
+	raw, err := os.ReadFile(testFixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	gzPath := filepath.Join(t.TempDir(), "simple.xt.gz")
+	f, err := os.Create(gzPath)
+	if err != nil {
+		t.Fatalf("create gz: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	if _, err := gz.Write(raw); err != nil {
+		t.Fatalf("write gz: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gz writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close gz file: %v", err)
+	}
+
+	entries, err := ParseFile(gzPath)
+	if err != nil {
+		t.Fatalf("ParseFile on .xt.gz: %v", err)
+	}
+	if len(entries) != 25 {
+		t.Errorf("expected 25 entries from gzipped fixture, got %d", len(entries))
+	}
+}
+
+func TestOpenTraceFile_CorruptGzip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.xt.gz")
+	if err := os.WriteFile(path, []byte("not gzip data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenTraceFile(path); err == nil {
+		t.Fatal("expected error on corrupt gzip file")
 	}
 }

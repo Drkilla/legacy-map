@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -32,12 +33,47 @@ const (
 	maxScanBufferSize     = 16 * 1024 * 1024 // 16 MB — trace lines with huge serialized params can be very long
 )
 
-// ParseFile parses an entire XDebug trace file and returns all entries.
-// For large files, prefer ParseStream.
-func ParseFile(path string) ([]TraceEntry, error) {
+// OpenTraceFile opens a trace file for reading, transparently decompressing
+// gzip-compressed traces (.xt.gz — the XDebug 3 default when
+// xdebug.use_compression is enabled).
+func OpenTraceFile(path string) (io.ReadCloser, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open trace file: %w", err)
+	}
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("read gzip trace %s: %w", path, err)
+		}
+		return &gzipReadCloser{gz: gz, f: f}, nil
+	}
+	return f, nil
+}
+
+// gzipReadCloser closes both the gzip reader and the underlying file.
+type gzipReadCloser struct {
+	gz *gzip.Reader
+	f  *os.File
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) { return g.gz.Read(p) }
+
+func (g *gzipReadCloser) Close() error {
+	gzErr := g.gz.Close()
+	if fErr := g.f.Close(); fErr != nil {
+		return fErr
+	}
+	return gzErr
+}
+
+// ParseFile parses an entire XDebug trace file (.xt or .xt.gz) and returns
+// all entries. For large files, prefer ParseStream.
+func ParseFile(path string) ([]TraceEntry, error) {
+	f, err := OpenTraceFile(path)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 

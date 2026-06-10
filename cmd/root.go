@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,15 +25,15 @@ var rootCmd = &cobra.Command{
 }
 
 var parseCmd = &cobra.Command{
-	Use:   "parse <file.xt>",
-	Short: "Parse an XDebug trace file and output the filtered call tree as JSON",
+	Use:   "parse <file.xt|file.xt.gz>",
+	Short: "Parse an XDebug trace file (raw or gzipped) and output the filtered call tree as JSON",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runParse,
 }
 
 var watchCmd = &cobra.Command{
 	Use:   "watch <directory>",
-	Short: "Watch a directory for new .xt files and parse them automatically",
+	Short: "Watch a directory for new .xt/.xt.gz files and parse them automatically",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWatch,
 }
@@ -54,6 +55,7 @@ var (
 	flagPretty      bool
 	flagReturns     string
 	flagNoCollapse  bool
+	flagPreset      string
 )
 
 func init() {
@@ -69,6 +71,8 @@ func init() {
 			"Return value mode: truncate (default, 200 chars), type (type only), none (omit)")
 		cmd.Flags().BoolVar(&flagNoCollapse, "no-collapse", false,
 			"Disable collapsing of trivial leaf calls (getters, setters, hydrations)")
+		cmd.Flags().StringVar(&flagPreset, "preset", "",
+			"Framework preset adding excluded namespaces (symfony, laravel)")
 	}
 
 	parseCmd.Flags().StringVar(&flagScenario, "scenario", "",
@@ -103,13 +107,16 @@ func Execute() {
 
 func runParse(cmd *cobra.Command, args []string) error {
 	path := args[0]
-	cfg := buildFilterConfig()
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
 
 	start := time.Now()
 
-	f, err := os.Open(path)
+	f, err := parser.OpenTraceFile(path)
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return err
 	}
 	defer f.Close()
 
@@ -183,7 +190,10 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err := validateTraceDir(dir); err != nil {
 		return err
 	}
-	cfg := buildFilterConfig()
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
 
 	w := watcher.New(watcher.Config{
 		Dir:          dir,
@@ -209,7 +219,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err := validateTraceDir(dir); err != nil {
 		return err
 	}
-	cfg := buildFilterConfig()
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
 
 	// MCP server defaults: returns=type for token efficiency
 	serveOpts := buildOptions()
@@ -256,16 +269,26 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func buildFilterConfig() *filter.Config {
-	excluded := filter.DefaultExcludedNamespaces
-	if len(flagExcludeNS) > 0 {
-		excluded = append(excluded, flagExcludeNS...)
+func buildFilterConfig() (*filter.Config, error) {
+	excluded := make([]string, 0, len(filter.DefaultExcludedNamespaces)+len(flagExcludeNS))
+	excluded = append(excluded, filter.DefaultExcludedNamespaces...)
+
+	presetExtra, err := filter.PresetExcludes(flagPreset)
+	if err != nil {
+		return nil, err
+	}
+	excluded = append(excluded, presetExtra...)
+	excluded = append(excluded, flagExcludeNS...)
+
+	appPrefixes := flagAppNS
+	if len(appPrefixes) == 0 {
+		if detected := filter.DetectComposerAppNamespaces("."); len(detected) > 0 {
+			appPrefixes = detected
+			fmt.Fprintf(os.Stderr, "✓ App namespaces from composer.json: %s\n", strings.Join(detected, ", "))
+		} else {
+			appPrefixes = filter.DefaultAppPrefixes
+		}
 	}
 
-	appPrefixes := filter.DefaultAppPrefixes
-	if len(flagAppNS) > 0 {
-		appPrefixes = flagAppNS
-	}
-
-	return filter.NewConfig(excluded, appPrefixes)
+	return filter.NewConfig(excluded, appPrefixes), nil
 }
