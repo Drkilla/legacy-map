@@ -160,6 +160,43 @@ func (c *Config) ShouldKeep(e parser.TraceEntry) bool {
 	return true
 }
 
+// StreamKeeper decides which entries to keep during streaming parse.
+// On top of ShouldKeep (layers 1+2), it keeps excluded vendor calls made
+// directly from kept app code: those are required by the tree builder to
+// detect external calls (layer 3). Without this, stream-filtering would
+// silently drop every external call from the output.
+type StreamKeeper struct {
+	cfg *Config
+	// keptAppAtLevel tracks whether the most recent kept entry at each
+	// stack depth was application code.
+	keptAppAtLevel map[int]bool
+}
+
+// NewStreamKeeper creates a StreamKeeper for this config.
+func (c *Config) NewStreamKeeper() *StreamKeeper {
+	return &StreamKeeper{cfg: c, keptAppAtLevel: map[int]bool{}}
+}
+
+// Keep reports whether a streamed entry should be retained.
+// Must be called in stream order (entries arrive depth-first).
+func (k *StreamKeeper) Keep(e parser.TraceEntry) bool {
+	if !e.IsEntry {
+		return true
+	}
+
+	keep := k.cfg.ShouldKeep(e)
+	isApp := keep && k.cfg.IsAppCode(e.FunctionName)
+
+	// Excluded vendor call made directly from app code → keep it so the
+	// tree builder can record it as an external call
+	if !keep && k.keptAppAtLevel[e.Level-1] && k.cfg.IsExcluded(e.FunctionName) {
+		keep = true
+	}
+
+	k.keptAppAtLevel[e.Level] = isApp
+	return keep
+}
+
 // FilterEntries applies layers 1 and 2 on a slice of TraceEntry.
 // It returns only the entries that pass both filters.
 func (c *Config) FilterEntries(entries []parser.TraceEntry) []parser.TraceEntry {

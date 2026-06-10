@@ -12,6 +12,7 @@ import (
 
 	"github.com/drkilla/legacy-map/internal/calltree"
 	"github.com/drkilla/legacy-map/internal/filter"
+	"github.com/drkilla/legacy-map/internal/format"
 	mcpserver "github.com/drkilla/legacy-map/internal/mcp"
 	"github.com/drkilla/legacy-map/internal/parser"
 	"github.com/drkilla/legacy-map/internal/watcher"
@@ -56,6 +57,7 @@ var (
 	flagReturns     string
 	flagNoCollapse  bool
 	flagPreset      string
+	flagFormat      string
 )
 
 func init() {
@@ -79,6 +81,8 @@ func init() {
 		"Optional scenario label (e.g. 'Login flow')")
 	parseCmd.Flags().BoolVar(&flagPretty, "pretty", false,
 		"Pretty-print JSON output (default: compact)")
+	parseCmd.Flags().StringVar(&flagFormat, "format", "json",
+		"Output format: json (default), tree, mermaid, markdown")
 
 	for _, cmd := range []*cobra.Command{watchCmd, serveCmd} {
 		cmd.Flags().IntVar(&flagBufferSize, "buffer-size", 20,
@@ -105,29 +109,23 @@ func Execute() {
 	}
 }
 
-func runParse(cmd *cobra.Command, args []string) error {
-	path := args[0]
-	cfg, err := buildFilterConfig()
-	if err != nil {
-		return err
-	}
-
-	start := time.Now()
-
+// parseTraceFile runs the full parse+filter+build pipeline on a trace file.
+func parseTraceFile(path string, cfg *filter.Config, opts *calltree.BuildOptions) (*calltree.TraceResult, error) {
 	f, err := parser.OpenTraceFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
 	var totalRaw int
 	var kept []parser.TraceEntry
 	keptFunctions := make(map[int]bool)
+	keeper := cfg.NewStreamKeeper()
 
 	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
 		if e.IsEntry {
 			totalRaw++
-			if cfg.ShouldKeep(e) {
+			if keeper.Keep(e) {
 				keptFunctions[e.FunctionNr] = true
 				kept = append(kept, e)
 			}
@@ -139,25 +137,45 @@ func runParse(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	parseDur := time.Since(start)
 
-	opts := &calltree.BuildOptions{
-		ReturnsMode: flagReturns,
-		Collapse:    !flagNoCollapse,
-	}
 	result := calltree.BuildFromFiltered(kept, cfg, totalRaw, flagPathPrefix, opts)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
-	result.Scenario = flagScenario
 	result.HTTPMethod, result.URI = watcher.DetectURIFromFilename(path)
+	return result, nil
+}
+
+func runParse(cmd *cobra.Command, args []string) error {
+	path := args[0]
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	result, err := parseTraceFile(path, cfg, buildOptions())
+	if err != nil {
+		return err
+	}
+	result.Scenario = flagScenario
+	parseDur := time.Since(start)
 
 	fmt.Fprintf(os.Stderr, "✓ Parsed %s in %s\n", path, parseDur.Round(time.Millisecond))
 	fmt.Fprintf(os.Stderr, "  Raw calls:      %d\n", result.TotalCalls)
 	fmt.Fprintf(os.Stderr, "  Tree nodes:     %d\n", result.FilteredCalls)
 	fmt.Fprintf(os.Stderr, "  Duration:       %.1f ms\n", result.DurationMs)
 	fmt.Fprintf(os.Stderr, "  Services:       %d\n", len(result.ServicesUsed))
+
+	if flagFormat != "json" {
+		out, err := format.Render(result, flagFormat)
+		if err != nil {
+			return err
+		}
+		fmt.Print(out)
+		return nil
+	}
 
 	enc := json.NewEncoder(os.Stdout)
 	if flagPretty {

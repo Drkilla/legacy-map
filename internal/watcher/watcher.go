@@ -189,11 +189,12 @@ func (w *Watcher) processFile(path string) {
 	var totalRaw int
 	var kept []parser.TraceEntry
 	keptFunctions := make(map[int]bool)
+	keeper := w.cfg.Filter.NewStreamKeeper()
 
 	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
 		if e.IsEntry {
 			totalRaw++
-			if w.cfg.Filter.ShouldKeep(e) {
+			if keeper.Keep(e) {
 				keptFunctions[e.FunctionNr] = true
 				kept = append(kept, e)
 			}
