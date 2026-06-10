@@ -114,10 +114,10 @@ func TestBuild_Fixture_Services(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		`App\Controller\ReservationController`:  "controller",
-		`App\Service\ReservationService`:        "service",
-		`App\Entity\Reservation`:                "entity",
-		`App\Repository\ReservationRepository`:  "repository",
+		`App\Controller\ReservationController`: "controller",
+		`App\Service\ReservationService`:       "service",
+		`App\Entity\Reservation`:               "entity",
+		`App\Repository\ReservationRepository`: "repository",
 	}
 
 	for cls, role := range expected {
@@ -178,7 +178,7 @@ func TestBuild_Fixture_ReturnValues(t *testing.T) {
 
 func TestSplitFunctionName(t *testing.T) {
 	tests := []struct {
-		input                string
+		input                 string
 		wantClass, wantMethod string
 	}{
 		{`App\Service\Foo->bar`, `App\Service\Foo`, "bar"},

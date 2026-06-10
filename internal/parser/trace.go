@@ -14,9 +14,9 @@ import (
 type TraceEntry struct {
 	Level        int
 	FunctionNr   int
-	IsEntry      bool    // EntryExit == "0"
-	IsExit       bool    // EntryExit == "1"
-	IsReturn     bool    // EntryExit == "R"
+	IsEntry      bool // EntryExit == "0"
+	IsExit       bool // EntryExit == "1"
+	IsReturn     bool // EntryExit == "R"
 	Timestamp    float64
 	Memory       int64
 	FunctionName string

@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -201,7 +201,7 @@ skipINI:
 type xdebugStatus int
 
 const (
-	xdebugInstalled   xdebugStatus = iota
+	xdebugInstalled xdebugStatus = iota
 	xdebugMissing
 	xdebugCheckFailed
 )

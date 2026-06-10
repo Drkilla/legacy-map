@@ -13,7 +13,7 @@ func TestTrie_HasPrefix(t *testing.T) {
 		{`Doctrine\ORM\EntityManager`, true},
 		{`App\Service\FooService`, true},
 		{`App\`, true},
-		{`Ap`, false},    // partial prefix, no match
+		{`Ap`, false},     // partial prefix, no match
 		{`Symfon`, false}, // partial prefix
 		{`strlen`, false},
 		{``, false},
