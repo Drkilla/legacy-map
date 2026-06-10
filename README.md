@@ -1,12 +1,16 @@
 # legacy-map
 
-Automatic execution flow mapping for PHP/Symfony via XDebug + AI.
+[![CI](https://github.com/drkilla/legacy-map/actions/workflows/ci.yml/badge.svg)](https://github.com/drkilla/legacy-map/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/drkilla/legacy-map)](https://github.com/drkilla/legacy-map/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Automatic execution flow mapping for PHP (Symfony, Laravel, anything with namespaces) via XDebug + AI.
 
 > You click in your app. You ask Claude: "What just happened?" He tells you.
 
 ## The problem
 
-On a PHP/Symfony codebase — especially legacy:
+On a PHP codebase — especially legacy:
 - Nobody knows exactly what the code does
 - Documentation doesn't exist or is outdated
 - Devs spend hours navigating code to understand a single flow
@@ -24,7 +28,7 @@ You trigger a request in your app
    You ask Claude → he explains the flow, generates docs, diagrams
 ```
 
-Works without AI too — `parse` and `watch` output JSON directly, no LLM required.
+Works without AI too — `parse` outputs JSON, an ASCII tree, a Mermaid diagram, or a full Markdown report (`--format`), and `diff` compares two flows. No LLM required.
 
 ## Real-world results
 
@@ -40,8 +44,14 @@ Works without AI too — `parse` and `watch` output JSON directly, no LLM requir
 ### 1. Install
 
 ```bash
+# Prebuilt binary (Linux/macOS — no Go required)
+curl -fsSL https://raw.githubusercontent.com/drkilla/legacy-map/main/install.sh | sh
+
+# Or with Go 1.23+
 go install github.com/drkilla/legacy-map@latest
 ```
+
+Windows binaries are available on the [releases page](https://github.com/drkilla/legacy-map/releases).
 
 ### 2. Setup in your project
 
@@ -85,17 +95,53 @@ Claude uses the `trigger_trace` MCP tool to fire the HTTP request with XDebug tr
 
 ```bash
 legacy-map init                    # Setup XDebug + trace directory + install guide
-legacy-map parse <file.xt>         # Parse a trace → JSON stdout
+legacy-map parse <file.xt[.gz]>    # Parse a trace → JSON/tree/mermaid/markdown
+legacy-map diff <a.xt> <b.xt>      # Compare two traces (flow changes, N+1s)
 legacy-map watch <dir>             # Watch and parse continuously
 legacy-map serve <dir>             # Watcher + MCP server (for Claude Code)
 legacy-map setup-mcp <dir>         # Configure Claude Code automatically
 ```
 
+### Human-readable output (no LLM required)
+
+```bash
+# ASCII call tree in the terminal
+legacy-map parse --format=tree trace.xt
+
+# Mermaid sequence diagram, ready to paste in a README or PR
+legacy-map parse --format=mermaid trace.xt
+
+# Full Markdown report: stats, services, diagram, external dependencies
+legacy-map parse --format=markdown trace.xt > docs/flows/login.md
+```
+
+### Compare two flows
+
+```bash
+legacy-map diff before.xt after.xt
+```
+
+```
+− Only in A (1):
+    1× App\Service\LegacyHasher->hash (3.2 ms)
++ Only in B (1):
+    1× App\Service\ArgonHasher->hash (5.1 ms)
+Δ Call count changed (1):
+    App\Repository\UserRepository->find: 1× → 4× (2.0 ms → 9.4 ms)
+= 26 functions identical
+```
+
+Perfect for verifying that a refactor kept the same execution flow, or spotting an N+1 regression. `--format=json` for machine consumption.
+
 ### Options
 
 ```bash
-# Change application namespace (default: App\)
+# Application namespaces are auto-detected from composer.json (PSR-4/PSR-0).
+# Override explicitly if needed:
 legacy-map parse --app-ns=Acme\\ trace.xt
+
+# Framework preset: adds common excludes (laravel → Illuminate\, Carbon\, ...)
+legacy-map parse --preset=laravel trace.xt
 
 # Exclude additional namespaces
 legacy-map parse --exclude-ns=Sentry\\,Jean85\\ trace.xt
@@ -178,6 +224,8 @@ php -i | grep xdebug.start_with_request
 # If "yes": every request is traced automatically
 ```
 
+**Compressed traces (.xt.gz):** supported natively — XDebug 3 compresses by default and legacy-map reads both `.xt` and `.xt.gz`.
+
 **Trace directory not accessible:**
 ```bash
 # Check the directory exists and is writable
@@ -186,17 +234,6 @@ ls -la /tmp/xdebug-traces/
 # Docker: check the volume is mounted
 docker compose exec php ls -la /tmp/xdebug-traces/
 ```
-
-### Traces are .xt.gz files (compressed)
-
-XDebug 3.x compresses by default. legacy-map cannot read compressed files.
-
-```ini
-# Add to your XDebug config:
-xdebug.use_compression=0
-```
-
-Restart PHP. `legacy-map init` already includes this option.
 
 ### trigger_trace timeout
 
@@ -255,17 +292,18 @@ INSTEAD OF reading source code statically.
 
 ## Prerequisites
 
-- **Go 1.23+** (for `go install`)
 - **PHP with XDebug 3.x** (on the target project)
-- **Symfony** (or any PHP project — namespace filtering is configurable)
+- **Symfony, Laravel, or any PHP project** — app namespaces are auto-detected from `composer.json`, framework noise is filtered via presets
+- Go 1.23+ only if installing with `go install` (prebuilt binaries don't need it)
 
 ## Architecture
 
 ```
 legacy-map (Go binary)
-├── Parser      — streaming TSV (bufio.Scanner, handles 50-500 MB files)
-├── Filter      — 3 layers (PHP internals, namespaces, vendor collapse)
-├── CallTree    — tree reconstruction + merge + dedup
+├── Parser      — streaming TSV (bufio.Scanner, handles 50-500 MB files, .xt and .xt.gz)
+├── Filter      — 3 layers (PHP internals, namespaces, vendor collapse) + presets
+├── CallTree    — tree reconstruction + merge + dedup + diff
+├── Format      — tree / mermaid / markdown renderers
 ├── Watcher     — fsnotify, thread-safe ring buffer
 └── MCP Server  — stdio, 4 tools for Claude Code / Cursor / Copilot
 ```

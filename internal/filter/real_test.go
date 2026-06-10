@@ -2,19 +2,30 @@ package filter
 
 import (
 	"fmt"
-"path/filepath"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/drkilla/legacy-map/internal/parser"
 )
 
-const realTraceDir = "/home/drkilla/projects/ezyformalite/xdebug-traces"
+// realTraceDir returns the directory containing real .xt traces for
+// integration testing, configured via the LEGACY_MAP_REAL_TRACES env var.
+func realTraceDir(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("LEGACY_MAP_REAL_TRACES")
+	if dir == "" {
+		t.Skip("LEGACY_MAP_REAL_TRACES not set — skipping real trace integration test")
+	}
+	return dir
+}
 
 func TestFilterRealTraces(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join(realTraceDir, "*.xt"))
+	dir := realTraceDir(t)
+	files, err := filepath.Glob(filepath.Join(dir, "*.xt"))
 	if err != nil || len(files) == 0 {
-		t.Skipf("no .xt files found in %s", realTraceDir)
+		t.Skipf("no .xt files found in %s", dir)
 	}
 
 	cfg := NewDefaultConfig()

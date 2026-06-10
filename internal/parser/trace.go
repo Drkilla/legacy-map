@@ -2,6 +2,8 @@ package parser
 
 import (
 	"bufio"
+	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,9 +15,9 @@ import (
 type TraceEntry struct {
 	Level        int
 	FunctionNr   int
-	IsEntry      bool    // EntryExit == "0"
-	IsExit       bool    // EntryExit == "1"
-	IsReturn     bool    // EntryExit == "R"
+	IsEntry      bool // EntryExit == "0"
+	IsExit       bool // EntryExit == "1"
+	IsReturn     bool // EntryExit == "R"
 	Timestamp    float64
 	Memory       int64
 	FunctionName string
@@ -26,14 +28,52 @@ type TraceEntry struct {
 	ReturnValue  string // only for IsReturn
 }
 
-const defaultScanBufferSize = 1024 * 1024 // 1 MB — trace lines with many params can be long
+const (
+	initialScanBufferSize = 256 * 1024       // 256 KB initial allocation
+	maxScanBufferSize     = 16 * 1024 * 1024 // 16 MB — trace lines with huge serialized params can be very long
+)
 
-// ParseFile parses an entire XDebug trace file and returns all entries.
-// For large files, prefer ParseStream.
-func ParseFile(path string) ([]TraceEntry, error) {
+// OpenTraceFile opens a trace file for reading, transparently decompressing
+// gzip-compressed traces (.xt.gz — the XDebug 3 default when
+// xdebug.use_compression is enabled).
+func OpenTraceFile(path string) (io.ReadCloser, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open trace file: %w", err)
+	}
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("read gzip trace %s: %w", path, err)
+		}
+		return &gzipReadCloser{gz: gz, f: f}, nil
+	}
+	return f, nil
+}
+
+// gzipReadCloser closes both the gzip reader and the underlying file.
+type gzipReadCloser struct {
+	gz *gzip.Reader
+	f  *os.File
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) { return g.gz.Read(p) }
+
+func (g *gzipReadCloser) Close() error {
+	gzErr := g.gz.Close()
+	if fErr := g.f.Close(); fErr != nil {
+		return fErr
+	}
+	return gzErr
+}
+
+// ParseFile parses an entire XDebug trace file (.xt or .xt.gz) and returns
+// all entries. For large files, prefer ParseStream.
+func ParseFile(path string) ([]TraceEntry, error) {
+	f, err := OpenTraceFile(path)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 
@@ -52,7 +92,7 @@ func ParseFile(path string) ([]TraceEntry, error) {
 // the callback for each parsed entry. It never loads the entire file into memory.
 func ParseStream(r io.Reader, callback func(TraceEntry) error) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, defaultScanBufferSize), defaultScanBufferSize)
+	scanner.Buffer(make([]byte, initialScanBufferSize), maxScanBufferSize)
 
 	// Skip 3-line header: Version, File format, TRACE START
 	for i := 0; i < 3; i++ {
@@ -84,7 +124,13 @@ func ParseStream(r io.Reader, callback func(TraceEntry) error) error {
 		}
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("line %d exceeds %d MB — reduce xdebug.var_display_max_data or disable xdebug.collect_params", lineNum+1, maxScanBufferSize/(1024*1024))
+		}
+		return err
+	}
+	return nil
 }
 
 // parseLine parses a single tab-separated trace line into a TraceEntry.

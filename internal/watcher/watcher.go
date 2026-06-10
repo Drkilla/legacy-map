@@ -24,13 +24,12 @@ type Config struct {
 	BuildOptions *calltree.BuildOptions
 }
 
-// Watcher watches a directory for new .xt files and processes them.
+// Watcher watches a directory for new .xt/.xt.gz files and processes them.
 type Watcher struct {
-	cfg          Config
-	store        *Store
-	done         chan struct{}
-	stopOnce     sync.Once
-	gzWarnedOnce bool
+	cfg      Config
+	store    *Store
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // New creates a new Watcher.
@@ -65,9 +64,9 @@ func (w *Watcher) Run() error {
 		return fmt.Errorf("watch dir %s: %w", w.cfg.Dir, err)
 	}
 
-	log.Printf("👀 Watching %s for .xt files (buffer: %d)", w.cfg.Dir, w.cfg.BufferSize)
+	log.Printf("👀 Watching %s for .xt/.xt.gz files (buffer: %d)", w.cfg.Dir, w.cfg.BufferSize)
 
-	// Process any existing .xt files on startup
+	// Process any existing trace files on startup
 	w.processExisting()
 
 	for {
@@ -76,15 +75,8 @@ func (w *Watcher) Run() error {
 			if !ok {
 				return nil
 			}
-			if event.Has(fsnotify.Create) {
-				if strings.HasSuffix(event.Name, ".xt.gz") {
-					if !w.gzWarnedOnce {
-						log.Printf("⚠ Compressed trace detected: %s — Set xdebug.use_compression=0 in your PHP config and restart", filepath.Base(event.Name))
-						w.gzWarnedOnce = true
-					}
-				} else if strings.HasSuffix(event.Name, ".xt") {
-					w.handleNewFile(event.Name)
-				}
+			if event.Has(fsnotify.Create) && isTraceFile(event.Name) {
+				w.handleNewFile(event.Name)
 			}
 		case err, ok := <-fsw.Errors:
 			if !ok {
@@ -104,14 +96,21 @@ func (w *Watcher) Stop() {
 	})
 }
 
-// processExisting processes .xt files already present in the directory.
+// isTraceFile reports whether a path looks like an XDebug trace file.
+func isTraceFile(path string) bool {
+	return strings.HasSuffix(path, ".xt") || strings.HasSuffix(path, ".xt.gz")
+}
+
+// processExisting processes trace files already present in the directory.
 func (w *Watcher) processExisting() {
-	matches, err := filepath.Glob(filepath.Join(w.cfg.Dir, "*.xt"))
-	if err != nil {
-		return
-	}
-	for _, path := range matches {
-		w.processFile(path)
+	for _, pattern := range []string{"*.xt", "*.xt.gz"} {
+		matches, err := filepath.Glob(filepath.Join(w.cfg.Dir, pattern))
+		if err != nil {
+			continue
+		}
+		for _, path := range matches {
+			w.processFile(path)
+		}
 	}
 }
 
@@ -145,8 +144,9 @@ func (w *Watcher) waitForComplete(path string, timeout time.Duration) bool {
 
 		currentSize := info.Size()
 
-		// Check for TRACE END in the last bytes
-		if currentSize > 50 {
+		// Check for TRACE END in the last bytes (raw .xt only — the tail of
+		// a gzip file is compressed, so .gz relies on size stability below)
+		if currentSize > 50 && !strings.HasSuffix(path, ".gz") {
 			f, err := os.Open(path)
 			if err == nil {
 				buf := make([]byte, 50)
@@ -179,7 +179,7 @@ func (w *Watcher) waitForComplete(path string, timeout time.Duration) bool {
 func (w *Watcher) processFile(path string) {
 	start := time.Now()
 
-	f, err := os.Open(path)
+	f, err := parser.OpenTraceFile(path)
 	if err != nil {
 		log.Printf("✗ Open error %s: %v", filepath.Base(path), err)
 		return
@@ -189,11 +189,12 @@ func (w *Watcher) processFile(path string) {
 	var totalRaw int
 	var kept []parser.TraceEntry
 	keptFunctions := make(map[int]bool)
+	keeper := w.cfg.Filter.NewStreamKeeper()
 
 	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
 		if e.IsEntry {
 			totalRaw++
-			if w.cfg.Filter.ShouldKeep(e) {
+			if keeper.Keep(e) {
 				keptFunctions[e.FunctionNr] = true
 				kept = append(kept, e)
 			}
@@ -233,6 +234,7 @@ func (w *Watcher) processFile(path string) {
 // DetectURIFromFilename extracts URI from XDebug trace filename.
 func DetectURIFromFilename(path string) (method, uri string) {
 	base := filepath.Base(path)
+	base = strings.TrimSuffix(base, ".gz")
 	base = strings.TrimSuffix(base, ".xt")
 
 	parts := strings.SplitN(base, ".", 3)

@@ -1,0 +1,29 @@
+Version: 3.3.1
+File format: 4
+TRACE START [2024-06-15 10:00:00.000000]
+1	1	0	0.000100	393216	{main}	1		/var/www/app/public/index.php	0	0
+2	2	0	0.000500	394000	App\Controller\ReservationController->create	1		/var/www/app/src/Controller/ReservationController.php	25	1	class Symfony\Component\HttpFoundation\Request { ... }
+3	3	0	0.001000	395000	App\Service\ReservationService->create	1		/var/www/app/src/Service/ReservationService.php	40	2	'Hotel Marvelous'	'2024-06-15'
+4	4	0	0.001200	396000	App\Entity\Reservation->__construct	1		/var/www/app/src/Entity/Reservation.php	18	2	'Hotel Marvelous'	'2024-06-15'
+4	4	1	0.001400	403500
+4	4	R			NULL
+4	5	0	0.001500	404000	App\Repository\ReservationRepository->save	1		/var/www/app/src/Repository/ReservationRepository.php	30	1	class App\Entity\Reservation { ... }
+5	6	0	0.001600	405000	Doctrine\ORM\EntityManagerInterface->persist	1		/var/www/app/vendor/doctrine/orm/src/EntityManager.php	600	1	class App\Entity\Reservation { ... }
+6	7	0	0.001700	406000	Doctrine\ORM\UnitOfWork->scheduleForInsert	1		/var/www/app/vendor/doctrine/orm/src/UnitOfWork.php	300	1	class App\Entity\Reservation { ... }
+6	7	1	0.001800	407000
+5	6	1	0.001900	407500
+5	8	0	0.002000	408000	Doctrine\ORM\EntityManagerInterface->flush	1		/var/www/app/vendor/doctrine/orm/src/EntityManager.php	620	0
+5	8	1	0.003000	409000
+4	5	1	0.003100	409500
+4	5	R			TRUE
+3	3	1	0.003200	410000
+3	3	R			class App\Entity\Reservation { ... }
+3	9	0	0.003300	410200	strlen	0		/var/www/app/src/Controller/ReservationController.php	30	1	'Hotel Marvelous'
+3	9	1	0.003400	410300
+3	9	R			16
+3	10	0	0.003500	411000	Symfony\Component\HttpFoundation\JsonResponse->__construct	1		/var/www/app/vendor/symfony/http-foundation/JsonResponse.php	50	1	array(2) { ... }
+3	10	1	0.003600	412000
+2	2	1	0.003700	412500
+2	2	R			class Symfony\Component\HttpFoundation\JsonResponse { ... }
+1	1	1	0.004000	380000
+TRACE END   [2024-06-15 10:00:00.004000]

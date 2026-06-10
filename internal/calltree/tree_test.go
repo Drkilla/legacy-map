@@ -114,10 +114,10 @@ func TestBuild_Fixture_Services(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		`App\Controller\ReservationController`:  "controller",
-		`App\Service\ReservationService`:        "service",
-		`App\Entity\Reservation`:                "entity",
-		`App\Repository\ReservationRepository`:  "repository",
+		`App\Controller\ReservationController`: "controller",
+		`App\Service\ReservationService`:       "service",
+		`App\Entity\Reservation`:               "entity",
+		`App\Repository\ReservationRepository`: "repository",
 	}
 
 	for cls, role := range expected {
@@ -178,7 +178,7 @@ func TestBuild_Fixture_ReturnValues(t *testing.T) {
 
 func TestSplitFunctionName(t *testing.T) {
 	tests := []struct {
-		input                string
+		input                 string
 		wantClass, wantMethod string
 	}{
 		{`App\Service\Foo->bar`, `App\Service\Foo`, "bar"},
@@ -235,12 +235,21 @@ func findNode(node *CallNode, funcName string) *CallNode {
 
 // --- Real trace integration test ---
 
-const realTraceDir = "/home/drkilla/projects/ezyformalite/xdebug-traces"
+// realTraceDir is configured via the LEGACY_MAP_REAL_TRACES env var.
+func realTraceDir(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("LEGACY_MAP_REAL_TRACES")
+	if dir == "" {
+		t.Skip("LEGACY_MAP_REAL_TRACES not set — skipping real trace integration test")
+	}
+	return dir
+}
 
 func TestBuild_RealTrace(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join(realTraceDir, "*.xt"))
+	dir := realTraceDir(t)
+	files, err := filepath.Glob(filepath.Join(dir, "*.xt"))
 	if err != nil || len(files) == 0 {
-		t.Skipf("no .xt files in %s", realTraceDir)
+		t.Skipf("no .xt files in %s", dir)
 	}
 
 	cfg := filter.NewDefaultConfig()
@@ -425,11 +434,6 @@ func TestBuildFromFiltered_ReturnsMode(t *testing.T) {
 	if repo2.ReturnValue != "bool" {
 		t.Errorf("returns=type: expected 'bool' for TRUE, got %q", repo2.ReturnValue)
 	}
-}
-
-func init() {
-	// Silence unused import
-	_ = os.Stdout
 }
 
 func TestCollapseTrivialSubtree_Recursive(t *testing.T) {
@@ -667,5 +671,66 @@ func TestIsTrivialSubtree(t *testing.T) {
 	}
 	if isTrivialSubtree(deepHTTP) {
 		t.Error("trivial wrapper over deep httpCall should NOT be trivial (recursive)")
+	}
+}
+
+// TestBuildFromFiltered_StreamPipeline_ExternalCalls reproduces the real
+// parse/watch pipeline: stream-filtering entries with a StreamKeeper before
+// building the tree. External calls (vendor calls made from app code) must
+// survive the stream filter — this regressed when stream filtering was
+// introduced, because plain ShouldKeep drops every vendor entry before the
+// tree builder can record them.
+func TestBuildFromFiltered_StreamPipeline_ExternalCalls(t *testing.T) {
+	entries, err := parser.ParseFile(testFixturePath)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+
+	cfg := filter.NewDefaultConfig()
+	keeper := cfg.NewStreamKeeper()
+
+	var totalRaw int
+	var kept []parser.TraceEntry
+	keptFunctions := map[int]bool{}
+	for _, e := range entries {
+		if e.IsEntry {
+			totalRaw++
+			if keeper.Keep(e) {
+				keptFunctions[e.FunctionNr] = true
+				kept = append(kept, e)
+			}
+		} else if keptFunctions[e.FunctionNr] {
+			kept = append(kept, e)
+		}
+	}
+
+	result := BuildFromFiltered(kept, cfg, totalRaw, "/var/www/app/", nil)
+
+	repo := findNode(result.CallTree, `App\Repository\ReservationRepository->save`)
+	if repo == nil {
+		t.Fatal("could not find ReservationRepository->save in tree")
+	}
+	want := map[string]bool{
+		`Doctrine\ORM\EntityManagerInterface->persist`: false,
+		`Doctrine\ORM\EntityManagerInterface->flush`:   false,
+	}
+	for _, ec := range repo.ExternalCalls {
+		if _, ok := want[ec]; ok {
+			want[ec] = true
+		}
+	}
+	for fn, found := range want {
+		if !found {
+			t.Errorf("external call %s lost by stream filtering (got %v)", fn, repo.ExternalCalls)
+		}
+	}
+
+	// The vendor nodes themselves must NOT appear as tree nodes
+	if findNode(result.CallTree, `Doctrine\ORM\EntityManagerInterface->persist`) != nil {
+		t.Error("excluded vendor call should be an external call, not a tree node")
+	}
+	// Grandchildren of excluded vendor calls must not be kept
+	if findNode(result.CallTree, `Doctrine\ORM\UnitOfWork->scheduleForInsert`) != nil {
+		t.Error("vendor call below an excluded vendor call should be dropped")
 	}
 }

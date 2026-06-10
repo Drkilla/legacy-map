@@ -55,11 +55,11 @@ type ServiceInfo struct {
 // buildNode is an intermediate node used during tree construction.
 // It holds both entry and timing data before conversion to CallNode.
 type buildNode struct {
-	entry      parser.TraceEntry
-	exitTime   float64
-	returnVal  string
-	children   []*buildNode
-	parent     *buildNode
+	entry     parser.TraceEntry
+	exitTime  float64
+	returnVal string
+	children  []*buildNode
+	parent    *buildNode
 }
 
 // Build constructs a CallTree from raw trace entries and a filter config.

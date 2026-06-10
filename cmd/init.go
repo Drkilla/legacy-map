@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -53,7 +53,7 @@ xdebug.trace_output_name=trace.%%t.%%R
 xdebug.start_with_request=trigger
 xdebug.collect_return=1
 xdebug.collect_assignments=0
-; Disable compression — legacy-map reads raw .xt files, not .xt.gz
+; Optional: legacy-map reads .xt.gz too, but raw .xt files are easier to inspect
 xdebug.use_compression=0
 `
 
@@ -179,7 +179,7 @@ skipINI:
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "  2. Restart PHP:")
 		fmt.Fprintln(os.Stderr, "     sudo systemctl restart php-fpm")
-		fmt.Fprintln(os.Stderr, "     # ou: symfony server:stop && symfony serve -d")
+		fmt.Fprintln(os.Stderr, "     # or: symfony server:stop && symfony serve -d")
 	}
 
 	fmt.Fprintln(os.Stderr)
@@ -201,7 +201,7 @@ skipINI:
 type xdebugStatus int
 
 const (
-	xdebugInstalled   xdebugStatus = iota
+	xdebugInstalled xdebugStatus = iota
 	xdebugMissing
 	xdebugCheckFailed
 )

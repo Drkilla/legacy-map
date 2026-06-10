@@ -6,11 +6,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/drkilla/legacy-map/internal/calltree"
 	"github.com/drkilla/legacy-map/internal/filter"
+	"github.com/drkilla/legacy-map/internal/format"
 	mcpserver "github.com/drkilla/legacy-map/internal/mcp"
 	"github.com/drkilla/legacy-map/internal/parser"
 	"github.com/drkilla/legacy-map/internal/watcher"
@@ -24,15 +26,15 @@ var rootCmd = &cobra.Command{
 }
 
 var parseCmd = &cobra.Command{
-	Use:   "parse <file.xt>",
-	Short: "Parse an XDebug trace file and output the filtered call tree as JSON",
+	Use:   "parse <file.xt|file.xt.gz>",
+	Short: "Parse an XDebug trace file (raw or gzipped) and output the filtered call tree as JSON",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runParse,
 }
 
 var watchCmd = &cobra.Command{
 	Use:   "watch <directory>",
-	Short: "Watch a directory for new .xt files and parse them automatically",
+	Short: "Watch a directory for new .xt/.xt.gz files and parse them automatically",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWatch,
 }
@@ -54,6 +56,8 @@ var (
 	flagPretty      bool
 	flagReturns     string
 	flagNoCollapse  bool
+	flagPreset      string
+	flagFormat      string
 )
 
 func init() {
@@ -69,12 +73,16 @@ func init() {
 			"Return value mode: truncate (default, 200 chars), type (type only), none (omit)")
 		cmd.Flags().BoolVar(&flagNoCollapse, "no-collapse", false,
 			"Disable collapsing of trivial leaf calls (getters, setters, hydrations)")
+		cmd.Flags().StringVar(&flagPreset, "preset", "",
+			"Framework preset adding excluded namespaces (symfony, laravel)")
 	}
 
 	parseCmd.Flags().StringVar(&flagScenario, "scenario", "",
 		"Optional scenario label (e.g. 'Login flow')")
 	parseCmd.Flags().BoolVar(&flagPretty, "pretty", false,
 		"Pretty-print JSON output (default: compact)")
+	parseCmd.Flags().StringVar(&flagFormat, "format", "json",
+		"Output format: json (default), tree, mermaid, markdown")
 
 	for _, cmd := range []*cobra.Command{watchCmd, serveCmd} {
 		cmd.Flags().IntVar(&flagBufferSize, "buffer-size", 20,
@@ -101,26 +109,23 @@ func Execute() {
 	}
 }
 
-func runParse(cmd *cobra.Command, args []string) error {
-	path := args[0]
-	cfg := buildFilterConfig()
-
-	start := time.Now()
-
-	f, err := os.Open(path)
+// parseTraceFile runs the full parse+filter+build pipeline on a trace file.
+func parseTraceFile(path string, cfg *filter.Config, opts *calltree.BuildOptions) (*calltree.TraceResult, error) {
+	f, err := parser.OpenTraceFile(path)
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return nil, err
 	}
 	defer f.Close()
 
 	var totalRaw int
 	var kept []parser.TraceEntry
 	keptFunctions := make(map[int]bool)
+	keeper := cfg.NewStreamKeeper()
 
 	err = parser.ParseStream(f, func(e parser.TraceEntry) error {
 		if e.IsEntry {
 			totalRaw++
-			if cfg.ShouldKeep(e) {
+			if keeper.Keep(e) {
 				keptFunctions[e.FunctionNr] = true
 				kept = append(kept, e)
 			}
@@ -132,25 +137,45 @@ func runParse(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	parseDur := time.Since(start)
 
-	opts := &calltree.BuildOptions{
-		ReturnsMode: flagReturns,
-		Collapse:    !flagNoCollapse,
-	}
 	result := calltree.BuildFromFiltered(kept, cfg, totalRaw, flagPathPrefix, opts)
 	result.TraceFile = path
 	result.Timestamp = time.Now().Format(time.RFC3339)
-	result.Scenario = flagScenario
 	result.HTTPMethod, result.URI = watcher.DetectURIFromFilename(path)
+	return result, nil
+}
+
+func runParse(cmd *cobra.Command, args []string) error {
+	path := args[0]
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	result, err := parseTraceFile(path, cfg, buildOptions())
+	if err != nil {
+		return err
+	}
+	result.Scenario = flagScenario
+	parseDur := time.Since(start)
 
 	fmt.Fprintf(os.Stderr, "✓ Parsed %s in %s\n", path, parseDur.Round(time.Millisecond))
 	fmt.Fprintf(os.Stderr, "  Raw calls:      %d\n", result.TotalCalls)
 	fmt.Fprintf(os.Stderr, "  Tree nodes:     %d\n", result.FilteredCalls)
 	fmt.Fprintf(os.Stderr, "  Duration:       %.1f ms\n", result.DurationMs)
 	fmt.Fprintf(os.Stderr, "  Services:       %d\n", len(result.ServicesUsed))
+
+	if flagFormat != "json" {
+		out, err := format.Render(result, flagFormat)
+		if err != nil {
+			return err
+		}
+		fmt.Print(out)
+		return nil
+	}
 
 	enc := json.NewEncoder(os.Stdout)
 	if flagPretty {
@@ -166,9 +191,27 @@ func buildOptions() *calltree.BuildOptions {
 	}
 }
 
+// validateTraceDir ensures the watched directory exists before starting.
+func validateTraceDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("trace directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("trace directory %s is not a directory", dir)
+	}
+	return nil
+}
+
 func runWatch(cmd *cobra.Command, args []string) error {
 	dir := args[0]
-	cfg := buildFilterConfig()
+	if err := validateTraceDir(dir); err != nil {
+		return err
+	}
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
 
 	w := watcher.New(watcher.Config{
 		Dir:          dir,
@@ -191,7 +234,13 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	dir := args[0]
-	cfg := buildFilterConfig()
+	if err := validateTraceDir(dir); err != nil {
+		return err
+	}
+	cfg, err := buildFilterConfig()
+	if err != nil {
+		return err
+	}
 
 	// MCP server defaults: returns=type for token efficiency
 	serveOpts := buildOptions()
@@ -207,16 +256,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 		BuildOptions: serveOpts,
 	})
 
-	// Start watcher in background
-	watchErr := make(chan error, 1)
+	log.SetOutput(os.Stderr) // Keep log output on stderr, stdio is for MCP
+
+	// Start watcher in background — a watcher failure must be visible,
+	// otherwise the MCP server keeps running without ever capturing traces
 	go func() {
-		watchErr <- w.Run()
+		if err := w.Run(); err != nil {
+			log.Printf("✗ Watcher stopped: %v — traces will no longer be captured", err)
+		}
 	}()
 
 	// Create and start MCP server on stdio
-	mcpSrv := mcpserver.NewServer(w.Store(), flagHTTPTimeout)
-
-	log.SetOutput(os.Stderr) // Keep log output on stderr, stdio is for MCP
+	mcpSrv := mcpserver.NewServer(w.Store(), flagHTTPTimeout, rootCmd.Version)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -236,16 +287,26 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func buildFilterConfig() *filter.Config {
-	excluded := filter.DefaultExcludedNamespaces
-	if len(flagExcludeNS) > 0 {
-		excluded = append(excluded, flagExcludeNS...)
+func buildFilterConfig() (*filter.Config, error) {
+	excluded := make([]string, 0, len(filter.DefaultExcludedNamespaces)+len(flagExcludeNS))
+	excluded = append(excluded, filter.DefaultExcludedNamespaces...)
+
+	presetExtra, err := filter.PresetExcludes(flagPreset)
+	if err != nil {
+		return nil, err
+	}
+	excluded = append(excluded, presetExtra...)
+	excluded = append(excluded, flagExcludeNS...)
+
+	appPrefixes := flagAppNS
+	if len(appPrefixes) == 0 {
+		if detected := filter.DetectComposerAppNamespaces("."); len(detected) > 0 {
+			appPrefixes = detected
+			fmt.Fprintf(os.Stderr, "✓ App namespaces from composer.json: %s\n", strings.Join(detected, ", "))
+		} else {
+			appPrefixes = filter.DefaultAppPrefixes
+		}
 	}
 
-	appPrefixes := filter.DefaultAppPrefixes
-	if len(flagAppNS) > 0 {
-		appPrefixes = flagAppNS
-	}
-
-	return filter.NewConfig(excluded, appPrefixes)
+	return filter.NewConfig(excluded, appPrefixes), nil
 }

@@ -3,8 +3,13 @@ legacy-map
 
 # XDebug traces
 *.xt
+*.xt.gz
 xdebug-traces/
 xdebug-traces/*.xt
+
+# Test fixtures are tracked despite *.xt
+!testdata/*.xt
+!testdata/*.xt.gz
 
 # Dev scripts
 run-mcp.sh
